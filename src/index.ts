@@ -17,6 +17,10 @@ async function main() {
   }
 
   bot = createBot(config.botToken);
+  bot.catch((err) => {
+    console.error("Bot error:", err.error ?? err);
+  });
+
   console.log(
     `AI: ${config.openaiApiKey ? `OpenAI (${config.openaiModel})` : "rule-based fallback"}`,
   );
@@ -30,7 +34,14 @@ async function main() {
     startWebServer(bot);
 
     const webhookUrl = `${config.webappUrl}${config.webhookPath}`;
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
+
+    // Clear any leftover polling session, then register webhook.
+    try {
+      await bot.api.deleteWebhook({ drop_pending_updates: true });
+    } catch (err) {
+      console.warn("deleteWebhook warning:", err);
+    }
+
     await bot.api.setWebhook(webhookUrl, {
       secret_token: config.webhookSecret,
       drop_pending_updates: true,
@@ -38,12 +49,17 @@ async function main() {
 
     const me = await bot.api.getMe();
     console.log(`Bot @${me.username} webhook → ${webhookUrl}`);
+    console.log("Ready. Do not run a second instance with the same BOT_TOKEN.");
     return;
   }
 
-  // Local / explicit polling
   startWebServer(bot);
-  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  try {
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+  } catch (err) {
+    console.warn("deleteWebhook warning:", err);
+  }
+
   await bot.start({
     onStart: (info) => {
       console.log(`Bot @${info.username} polling`);
@@ -54,9 +70,7 @@ async function main() {
 function shutdown(signal: string) {
   console.log(`Shutting down (${signal})…`);
   const done =
-    bot && config.botMode === "polling"
-      ? bot.stop()
-      : Promise.resolve();
+    bot && config.botMode === "polling" ? bot.stop() : Promise.resolve();
   void done.finally(() => {
     closeDb();
     process.exit(0);

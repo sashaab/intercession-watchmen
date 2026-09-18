@@ -46,4 +46,15 @@ OPENAI_MODEL=DeepSeek-V4.1-Flash
 2. В BotFather → Bot Settings → Menu Button → URL = тот же HTTPS  
 3. Перезапустите локально не обязательно — на сервере бот уже крутится с polling  
 
-Локальный `npm run dev` для продакшена остановите, иначе будет конфликт двух polling у одного бота.
+## Важно при 409 / 502
+
+Ошибка `getUpdates … terminated by setWebhook` — это **старый** контейнер с polling, который убивается новым webhook.
+
+1. Scale / Replicas = **1**
+2. **Stop** сервис полностью (подождать 10–20 сек)
+3. **Deploy** / Start заново
+4. В логах должна остаться одна линия `webhook → …` без `Bot.start` / `getUpdates`
+5. Проверка: `https://ваш-домен/health` → `{"ok":true}`
+
+Локально с тем же `BOT_TOKEN` ничего не запускайте.
+

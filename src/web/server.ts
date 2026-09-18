@@ -14,6 +14,14 @@ export function createWebServer(bot?: Bot): Express {
   app.use(cors());
   app.use(express.json({ limit: "1mb" }));
 
+  app.get("/health", (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      botMode: config.botMode,
+      webappUrl: config.webappUrl || null,
+    });
+  });
+
   if (bot && config.botMode === "webhook") {
     app.post(
       config.webhookPath,
@@ -28,7 +36,7 @@ export function createWebServer(bot?: Bot): Express {
 
   const publicDir = path.join(__dirname, "../../public");
   app.use(express.static(publicDir));
-  app.get(/^(?!\/api)(?!\/telegram).*/, (_req, res) => {
+  app.get(/^(?!\/api)(?!\/telegram)(?!\/health).*/, (_req, res) => {
     res.sendFile(path.join(publicDir, "index.html"));
   });
 
