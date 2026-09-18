@@ -30,6 +30,7 @@ PORT=3000
 DATABASE_PATH=/app/data/watchmen.db
 DEV_PREVIEW=0
 WEBAPP_URL=https://$(PRIMARY_DOMAIN)
+BOT_MODE=webhook
 
 OPENAI_BASE_URL=https://ai-llm.hecosys.com/v1
 OPENAI_API_KEY=

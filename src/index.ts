@@ -4,29 +4,59 @@ import { getDb, closeDb } from "./db/index.js";
 import { startWebServer } from "./web/server.js";
 
 getDb();
-startWebServer();
 
 let bot: ReturnType<typeof createBot> | null = null;
 
-if (config.runBot) {
+async function main() {
+  if (!config.runBot) {
+    startWebServer();
+    console.log(
+      "Bot skipped (no BOT_TOKEN). Mini App preview is available in the browser.",
+    );
+    return;
+  }
+
   bot = createBot(config.botToken);
   console.log(
     `AI: ${config.openaiApiKey ? `OpenAI (${config.openaiModel})` : "rule-based fallback"}`,
   );
-  bot.start({
+  console.log(`Bot mode: ${config.botMode}`);
+
+  if (config.botMode === "webhook") {
+    if (!config.webappUrl) {
+      throw new Error("WEBAPP_URL is required for webhook mode");
+    }
+
+    startWebServer(bot);
+
+    const webhookUrl = `${config.webappUrl}${config.webhookPath}`;
+    await bot.api.deleteWebhook({ drop_pending_updates: true });
+    await bot.api.setWebhook(webhookUrl, {
+      secret_token: config.webhookSecret,
+      drop_pending_updates: true,
+    });
+
+    const me = await bot.api.getMe();
+    console.log(`Bot @${me.username} webhook → ${webhookUrl}`);
+    return;
+  }
+
+  // Local / explicit polling
+  startWebServer(bot);
+  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  await bot.start({
     onStart: (info) => {
-      console.log(`Bot @${info.username} is running`);
+      console.log(`Bot @${info.username} polling`);
     },
   });
-} else {
-  console.log(
-    "Bot polling skipped (no BOT_TOKEN). Mini App preview is available in the browser.",
-  );
 }
 
 function shutdown(signal: string) {
   console.log(`Shutting down (${signal})…`);
-  const done = bot ? bot.stop() : Promise.resolve();
+  const done =
+    bot && config.botMode === "polling"
+      ? bot.stop()
+      : Promise.resolve();
   void done.finally(() => {
     closeDb();
     process.exit(0);
@@ -35,3 +65,8 @@ function shutdown(signal: string) {
 
 process.once("SIGINT", () => shutdown("SIGINT"));
 process.once("SIGTERM", () => shutdown("SIGTERM"));
+
+main().catch((err) => {
+  console.error("Fatal startup error:", err);
+  process.exit(1);
+});

@@ -19,33 +19,47 @@ function chatId(name: string): number | null {
 
 const devPreview = process.env.DEV_PREVIEW === "1";
 const botToken = process.env.BOT_TOKEN?.trim() || "";
+const webappUrl = process.env.WEBAPP_URL?.trim().replace(/\/$/, "") || "";
 
 if (!botToken && !devPreview) {
   throw new Error("Missing env: BOT_TOKEN (or set DEV_PREVIEW=1 for browser UI preview)");
 }
 
+const runBot = Boolean(botToken) && !botToken.startsWith("dev:");
+
+/** Prefer webhook in production when WEBAPP_URL is set. Force polling with BOT_MODE=polling */
+const botModeEnv = (process.env.BOT_MODE || "").trim().toLowerCase();
+const botMode: "webhook" | "polling" = !runBot
+  ? "polling"
+  : botModeEnv === "polling"
+    ? "polling"
+    : botModeEnv === "webhook" || webappUrl
+      ? "webhook"
+      : "polling";
+
 export const config = {
   botToken: botToken || "dev:preview-token",
   adminIds: idList("ADMIN_IDS"),
   leaderIds: idList("LEADER_IDS"),
-  /** Group/supergroup ID — members become admins */
   adminChatId: chatId("ADMIN_CHAT_ID"),
-  /** Group/supergroup ID — members become leaders */
   leaderChatId: chatId("LEADER_CHAT_ID"),
   openaiApiKey: process.env.OPENAI_API_KEY?.trim() || "",
   openaiModel: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
-  /** OpenAI-compatible endpoint (LiteLLM etc.). Empty = api.openai.com */
   openaiBaseUrl:
     process.env.OPENAI_BASE_URL?.trim().replace(/\/$/, "") || "",
   databasePath:
     process.env.DATABASE_PATH?.trim() ||
     path.join(process.cwd(), "data", "watchmen.db"),
   port: Number(process.env.PORT || 3000),
-  webappUrl: process.env.WEBAPP_URL?.trim().replace(/\/$/, "") || "",
+  webappUrl,
+  webhookPath: "/telegram/webhook",
+  webhookSecret:
+    process.env.WEBHOOK_SECRET?.trim() ||
+    (botToken ? `whsec_${botToken.slice(-16)}` : "dev-secret"),
+  botMode,
   devPreview,
   devPreviewUserId: Number(process.env.DEV_PREVIEW_USER_ID || 0) || null,
-  runBot: Boolean(botToken) && !botToken.startsWith("dev:"),
-  /** Cache chat membership checks (seconds) */
+  runBot,
   roleCacheSec: Number(process.env.ROLE_CACHE_SEC || 300),
 };
 
