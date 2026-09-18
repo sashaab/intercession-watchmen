@@ -13,11 +13,12 @@ const el = {
   nav: document.getElementById("nav"),
   main: document.getElementById("main"),
   toast: document.getElementById("toast"),
+  toastBody: document.getElementById("toastBody"),
 };
 
 function toast(message) {
   el.toast.hidden = false;
-  el.toast.textContent = message;
+  el.toastBody.textContent = message;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => {
     el.toast.hidden = true;
@@ -75,7 +76,7 @@ function renderNav() {
   el.nav.innerHTML = navItems()
     .map(
       (item) =>
-        `<button type="button" data-view="${item.id}" class="${
+        `<button type="button" data-view="${item.id}" class="nav-link ${
           state.view === item.id ? "active" : ""
         }">${item.label}</button>`,
     )
@@ -91,7 +92,7 @@ function renderNav() {
 
 async function render() {
   renderNav();
-  el.main.innerHTML = `<div class="panel"><p class="lead">Loading…</p></div>`;
+  el.main.innerHTML = `<div class="panel"><p class="panel-lead mb-0">Loading…</p></div>`;
   try {
     if (state.view === "record") await renderRecord();
     else if (state.view === "mine") await renderMine();
@@ -102,7 +103,7 @@ async function render() {
     else if (state.view === "learning") await renderLearning();
     else if (state.view === "roles") await renderRoles();
   } catch (err) {
-    el.main.innerHTML = `<div class="panel"><p class="lead">${escapeHtml(
+    el.main.innerHTML = `<div class="panel"><p class="panel-lead mb-0">${escapeHtml(
       err.message,
     )}</p></div>`;
   }
@@ -127,29 +128,40 @@ async function renderRecord() {
   el.main.innerHTML = `
     <section class="panel">
       ${previewBanner()}
-      <h2>Record an impression</h2>
-      <p class="lead">Keep <em>what you perceived</em> separate from <em>what you think it might mean</em>.</p>
+      <h2 class="panel-title">Record an impression</h2>
+      <p class="panel-lead">Keep <em>what you perceived</em> separate from <em>what you think it might mean</em>.</p>
       <form id="recordForm">
-        <label>What did you perceive?
-          <textarea name="perceived" required placeholder="Original perception only"></textarea>
-        </label>
-        <label>Interpretation (optional)
-          <textarea name="interpretation" placeholder="Your thoughts about meaning — separate field"></textarea>
-        </label>
-        <div class="row">
-          <label>Type
-            <select name="type" required>${types}</select>
-          </label>
-          <label>Context
-            <select name="context" required>${contexts}</select>
-          </label>
+        <div class="mb-3">
+          <label class="form-label" for="perceived">What did you perceive?</label>
+          <textarea class="form-control" id="perceived" name="perceived" required placeholder="Original perception only"></textarea>
         </div>
-        <label>Urgency
-          <select name="urgency">${urgencies}</select>
-        </label>
-        <label class="check"><input type="checkbox" name="prayed" /> Already prayed about this</label>
-        <label class="check"><input type="checkbox" name="confidential" /> Confidential / sensitive</label>
-        <button class="btn" type="submit">Submit</button>
+        <div class="mb-3">
+          <label class="form-label" for="interpretation">Interpretation (optional)</label>
+          <textarea class="form-control" id="interpretation" name="interpretation" placeholder="Your thoughts about meaning — separate field"></textarea>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-sm-6">
+            <label class="form-label" for="type">Type</label>
+            <select class="form-select" id="type" name="type" required>${types}</select>
+          </div>
+          <div class="col-sm-6">
+            <label class="form-label" for="context">Context</label>
+            <select class="form-select" id="context" name="context" required>${contexts}</select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="urgency">Urgency</label>
+          <select class="form-select" id="urgency" name="urgency">${urgencies}</select>
+        </div>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" name="prayed" id="prayed" />
+          <label class="form-check-label" for="prayed">Already prayed about this</label>
+        </div>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" name="confidential" id="confidential" />
+          <label class="form-check-label" for="confidential">Confidential / sensitive</label>
+        </div>
+        <button class="btn btn-watch" type="submit">Submit</button>
       </form>
       <div id="recordResult"></div>
     </section>
@@ -221,13 +233,13 @@ async function renderMine() {
   const { items } = await api("/impressions/mine");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>My history</h2>
-      <p class="lead">Your impressions and processing status.</p>
-      <div class="list">
+      <h2 class="panel-title">My history</h2>
+      <p class="panel-lead">Your impressions and processing status.</p>
+      <div class="d-grid gap-2">
         ${
           items.length
             ? items.map((i) => impressionCard(i)).join("")
-            : `<p class="empty">No impressions yet.</p>`
+            : `<p class="empty mb-0">No impressions yet.</p>`
         }
       </div>
     </section>
@@ -242,19 +254,20 @@ async function renderInbox() {
     .join("");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>Leadership inbox</h2>
-      <p class="lead">Who noticed what → review → decision → outcome.</p>
-      <label>Filter status
-        <select id="statusFilter">
+      <h2 class="panel-title">Leadership inbox</h2>
+      <p class="panel-lead">Who noticed what → review → decision → outcome.</p>
+      <div class="mb-3">
+        <label class="form-label" for="statusFilter">Filter status</label>
+        <select class="form-select" id="statusFilter">
           <option value="">All recent</option>
           ${statuses}
         </select>
-      </label>
-      <div id="inboxList" class="list">
+      </div>
+      <div id="inboxList" class="d-grid gap-2">
         ${
           items.length
             ? items.map((i) => impressionCard(i)).join("")
-            : `<p class="empty">Inbox is empty.</p>`
+            : `<p class="empty mb-0">Inbox is empty.</p>`
         }
       </div>
     </section>
@@ -267,7 +280,7 @@ async function renderInbox() {
     const list = document.getElementById("inboxList");
     list.innerHTML = data.items.length
       ? data.items.map((i) => impressionCard(i)).join("")
-      : `<p class="empty">No items.</p>`;
+      : `<p class="empty mb-0">No items.</p>`;
     wireOpen();
   });
 }
@@ -295,8 +308,8 @@ async function renderDetail() {
 
   el.main.innerHTML = `
     <section class="panel">
-      <button type="button" class="btn secondary" id="backBtn">← Back</button>
-      <h2>Impression #${item.id}</h2>
+      <button type="button" class="btn btn-watch-outline mb-3" id="backBtn">← Back</button>
+      <h2 class="panel-title">Impression #${item.id}</h2>
       <div class="detail-grid">
         <div><span class="muted">Watcher</span><br>${escapeHtml(item.watchman_name)}</div>
         <div><span class="muted">Type / context</span><br>${escapeHtml(
@@ -319,26 +332,32 @@ async function renderDetail() {
       ${
         isLeader()
           ? `
-        <label>Status
-          <select id="statusSelect">${statusOptions}</select>
-        </label>
-        <label>Decision notes
-          <textarea id="decisionNotes" placeholder="What was reviewed / decided">${escapeHtml(
+        <div class="mb-3 mt-3">
+          <label class="form-label" for="statusSelect">Status</label>
+          <select class="form-select" id="statusSelect">${statusOptions}</select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="decisionNotes">Decision notes</label>
+          <textarea class="form-control" id="decisionNotes" placeholder="What was reviewed / decided">${escapeHtml(
             item.decision_notes || "",
           )}</textarea>
-        </label>
-        <label>Forwarded to
-          <input id="forwardedTo" value="${escapeHtml(item.forwarded_to || "")}" />
-        </label>
-        <label>Outcome
-          <textarea id="outcome">${escapeHtml(item.outcome || "")}</textarea>
-        </label>
-        <div class="btn-row">
-          <button type="button" class="btn" id="saveStatus">Save decision</button>
-          <button type="button" class="btn ghost" id="makePrayer">Create prayer focus</button>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="forwardedTo">Forwarded to</label>
+          <input class="form-control" id="forwardedTo" value="${escapeHtml(
+            item.forwarded_to || "",
+          )}" />
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="outcome">Outcome</label>
+          <textarea class="form-control" id="outcome">${escapeHtml(item.outcome || "")}</textarea>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button type="button" class="btn btn-watch" id="saveStatus">Save decision</button>
+          <button type="button" class="btn btn-watch-ghost" id="makePrayer">Create prayer focus</button>
         </div>
       `
-          : `<p class="lead">Status: <strong>${escapeHtml(item.status)}</strong></p>`
+          : `<p class="panel-lead mb-0">Status: <strong>${escapeHtml(item.status)}</strong></p>`
       }
     </section>
   `;
@@ -386,9 +405,9 @@ async function renderRadar() {
   const { items } = await api("/radar");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>Topic radar</h2>
-      <p class="lead">Recurring themes from independent watchers (10 days).</p>
-      <div class="list">
+      <h2 class="panel-title">Topic radar</h2>
+      <p class="panel-lead">Recurring themes from independent watchers (10 days).</p>
+      <div class="d-grid gap-2">
         ${
           items.length
             ? items
@@ -405,7 +424,7 @@ async function renderRadar() {
             </div>`,
                 )
                 .join("")
-            : `<p class="empty">No multi-watcher clusters yet.</p>`
+            : `<p class="empty mb-0">No multi-watcher clusters yet.</p>`
         }
       </div>
     </section>
@@ -416,23 +435,26 @@ async function renderPrayer() {
   const { items } = await api("/prayer");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>Prayer focuses</h2>
-      <p class="lead">Create focuses from reviewed themes, assign timeframe, document updates.</p>
-      <form id="prayerForm" class="panel" style="box-shadow:none;padding:0;margin-bottom:14px">
-        <label>New focus title
-          <input name="title" required placeholder="Youth & Belonging" />
-        </label>
-        <div class="row">
-          <label>Weeks
-            <input name="weeks" type="number" min="1" value="4" />
-          </label>
-          <label>Shared with
-            <input name="sharedWith" placeholder="Youth Leadership" />
-          </label>
+      <h2 class="panel-title">Prayer focuses</h2>
+      <p class="panel-lead">Create focuses from reviewed themes, assign timeframe, document updates.</p>
+      <form id="prayerForm" class="mb-4">
+        <div class="mb-3">
+          <label class="form-label" for="prayerTitle">New focus title</label>
+          <input class="form-control" id="prayerTitle" name="title" required placeholder="Youth & Belonging" />
         </div>
-        <button class="btn" type="submit">Create</button>
+        <div class="row g-2 mb-3">
+          <div class="col-sm-6">
+            <label class="form-label" for="weeks">Weeks</label>
+            <input class="form-control" id="weeks" name="weeks" type="number" min="1" value="4" />
+          </div>
+          <div class="col-sm-6">
+            <label class="form-label" for="sharedWith">Shared with</label>
+            <input class="form-control" id="sharedWith" name="sharedWith" placeholder="Youth Leadership" />
+          </div>
+        </div>
+        <button class="btn btn-watch" type="submit">Create</button>
       </form>
-      <div class="list">
+      <div class="d-grid gap-2">
         ${
           items.length
             ? items
@@ -452,15 +474,15 @@ async function renderPrayer() {
                   ? `<div class="ai-box">${escapeHtml(f.updates)}</div>`
                   : ""
               }
-              <div class="btn-row">
-                <button type="button" class="btn ghost" data-act="update">Add update</button>
-                <button type="button" class="btn secondary" data-act="paused">Pause</button>
-                <button type="button" class="btn secondary" data-act="completed">Complete</button>
+              <div class="d-flex flex-wrap gap-2 mt-2">
+                <button type="button" class="btn btn-sm btn-watch-ghost" data-act="update">Add update</button>
+                <button type="button" class="btn btn-sm btn-watch-outline" data-act="paused">Pause</button>
+                <button type="button" class="btn btn-sm btn-watch-outline" data-act="completed">Complete</button>
               </div>
             </div>`,
                 )
                 .join("")
-            : `<p class="empty">No prayer focuses yet.</p>`
+            : `<p class="empty mb-0">No prayer focuses yet.</p>`
         }
       </div>
     </section>
@@ -517,15 +539,15 @@ async function renderLearning() {
   const data = await api("/learning");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>History & learning</h2>
-      <p class="lead">Not hit-rates for watchers — spiritual and practical learning.</p>
-      <div class="stats">
-        <div class="stat"><strong>${data.total}</strong><span class="muted">Total</span></div>
-        <div class="stat"><strong>${data.completed}</strong><span class="muted">Completed</span></div>
-        <div class="stat"><strong>${data.noAction}</strong><span class="muted">No action</span></div>
+      <h2 class="panel-title">History & learning</h2>
+      <p class="panel-lead">Not hit-rates for watchers — spiritual and practical learning.</p>
+      <div class="row g-2 stats mb-3">
+        <div class="col-4"><div class="stat"><strong>${data.total}</strong><span class="muted">Total</span></div></div>
+        <div class="col-4"><div class="stat"><strong>${data.completed}</strong><span class="muted">Completed</span></div></div>
+        <div class="col-4"><div class="stat"><strong>${data.noAction}</strong><span class="muted">No action</span></div></div>
       </div>
       <h3>Repeated topics</h3>
-      <div class="list">
+      <div class="d-grid gap-2">
         ${
           data.repeatedTopics.length
             ? data.repeatedTopics
@@ -538,7 +560,7 @@ async function renderLearning() {
               </div>`,
                 )
                 .join("")
-            : `<p class="empty">No repeated topics yet.</p>`
+            : `<p class="empty mb-0">No repeated topics yet.</p>`
         }
       </div>
     </section>
@@ -549,9 +571,9 @@ async function renderRoles() {
   const { items } = await api("/users");
   el.main.innerHTML = `
     <section class="panel">
-      <h2>Roles</h2>
-      <p class="lead">Sensitive items stay restricted; assign access carefully.</p>
-      <div class="list">
+      <h2 class="panel-title">Roles</h2>
+      <p class="panel-lead">Sensitive items stay restricted; assign access carefully.</p>
+      <div class="d-grid gap-2">
         ${items
           .map(
             (u) => `
@@ -560,14 +582,14 @@ async function renderRoles() {
               u.role,
             )}</span></div>
             <div class="item-meta">id ${u.telegram_id}</div>
-            <div class="btn-row">
-              <button type="button" class="btn ghost" data-role="watcher" data-user="${
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              <button type="button" class="btn btn-sm btn-watch-ghost" data-role="watcher" data-user="${
                 u.telegram_id
               }">Watcher</button>
-              <button type="button" class="btn ghost" data-role="leader" data-user="${
+              <button type="button" class="btn btn-sm btn-watch-ghost" data-role="leader" data-user="${
                 u.telegram_id
               }">Leader</button>
-              <button type="button" class="btn ghost" data-role="admin" data-user="${
+              <button type="button" class="btn btn-sm btn-watch-ghost" data-role="admin" data-user="${
                 u.telegram_id
               }">Admin</button>
             </div>
@@ -617,7 +639,7 @@ async function boot() {
 
 boot().catch((err) => {
   el.userLine.textContent = "Auth failed";
-  el.main.innerHTML = `<div class="panel"><p class="lead">${escapeHtml(
+  el.main.innerHTML = `<div class="panel"><p class="panel-lead mb-0">${escapeHtml(
     err.message,
   )}. For browser preview set DEV_PREVIEW=1 in .env</p></div>`;
 });

@@ -64,34 +64,42 @@ async function ensureUser(ctx: AppContext) {
   return syncUser(from.id, displayNameFromCtx(from));
 }
 
+function escapeHtml(text: string): string {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 async function showHome(ctx: AppContext): Promise<void> {
   const user = await ensureUser(ctx);
   if (!user) return;
+  // HTML parse mode: Markdown breaks on underscores in roleDetail (ADMIN_CHAT_ID etc.)
   const text = [
-    `*Intercession Watchmen*`,
+    `<b>Intercession Watchmen</b>`,
     "",
-    `Hello, ${escapeMd(user.display_name)}.`,
-    `Role: *${user.role}*`,
-    `_${escapeMd(user.roleDetail)}_`,
+    `Hello, ${escapeHtml(user.display_name)}.`,
+    `Role: <b>${escapeHtml(user.role)}</b>`,
+    `<i>${escapeHtml(user.roleDetail)}</i>`,
     "",
     "The app documents perceptions and supports organization.",
     "It never replaces spiritual discernment by the leadership team.",
     "",
     config.webappUrl
-      ? "📱 Open the *Mini App* for dashboard & full form, or record quickly in chat."
-      : "Set `WEBAPP_URL` to enable the Mini App button. Chat recording works now.",
+      ? "📱 Open the <b>Mini App</b> for dashboard &amp; full form, or record quickly in chat."
+      : "Set <code>WEBAPP_URL</code> to enable the Mini App button. Chat recording works now.",
     "",
     "Guardian perceives → App documents → AI suggests → Leadership decides.",
   ].join("\n");
 
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       reply_markup: mainMenuKeyboard(user),
     });
   } else {
     await ctx.reply(text, {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       reply_markup: mainMenuKeyboard(user),
     });
   }
