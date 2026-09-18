@@ -236,8 +236,19 @@ body {
   font-family: var(--font);
   font-weight: 400;
   color: #000000 !important;
-  background: #ffffff !important;
+  background-color: #ffffff !important;
   box-shadow: none;
+}
+
+/* Keep Bootstrap chevron — do not override background-image */
+.form-select {
+  padding-right: 2.5rem;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23000000' stroke-linecap='square' stroke-linejoin='miter' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 0.85rem center !important;
+  background-size: 14px 10px !important;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .form-control::placeholder {
@@ -250,7 +261,11 @@ body {
   border-color: #000000;
   box-shadow: 0 0 0 0.15rem rgba(74, 255, 212, 0.45);
   color: #000000 !important;
-  background: #ffffff !important;
+  background-color: #ffffff !important;
+}
+
+.form-select:focus {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23000000' stroke-linecap='square' stroke-linejoin='miter' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e") !important;
 }
 
 textarea.form-control {
