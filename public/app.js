@@ -628,8 +628,8 @@ async function boot() {
     tg.expand();
     // Keep Mini App on our light palette; ignore Telegram dark text/bg theme.
     try {
-      tg.setHeaderColor("#0b1f1a");
-      tg.setBackgroundColor("#eef4ef");
+      tg.setHeaderColor("#000000");
+      tg.setBackgroundColor("#ffffff");
     } catch {
       // Older clients may not support these APIs
     }
