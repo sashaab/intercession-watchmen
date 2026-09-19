@@ -1,13 +1,13 @@
 import { config } from "./config.js";
 import { createBot } from "./bot/handlers.js";
-import { getDb, closeDb } from "./db/index.js";
+import { closeDb, initDb } from "./db/index.js";
 import { startWebServer } from "./web/server.js";
-
-getDb();
 
 let bot: ReturnType<typeof createBot> | null = null;
 
 async function main() {
+  await initDb();
+
   if (!config.runBot) {
     startWebServer();
     console.log(
@@ -71,8 +71,8 @@ function shutdown(signal: string) {
   console.log(`Shutting down (${signal})…`);
   const done =
     bot && config.botMode === "polling" ? bot.stop() : Promise.resolve();
-  void done.finally(() => {
-    closeDb();
+  void done.finally(async () => {
+    await closeDb();
     process.exit(0);
   });
 }

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Bot } from "grammy";
 import { webhookCallback } from "grammy";
 import { config } from "../config.js";
+import { getDbStatus } from "../db/index.js";
 import { registerApi } from "./api.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,12 +15,33 @@ export function createWebServer(bot?: Bot): Express {
   app.use(cors());
   app.use(express.json({ limit: "1mb" }));
 
-  app.get("/health", (_req, res) => {
-    res.status(200).json({
-      ok: true,
-      botMode: config.botMode,
-      webappUrl: config.webappUrl || null,
-    });
+  app.get("/health", async (_req, res) => {
+    try {
+      const db = await getDbStatus();
+      res.status(200).json({
+        ok: true,
+        botMode: config.botMode,
+        webappUrl: config.webappUrl || null,
+        mysql: {
+          host: db.host,
+          port: db.port,
+          database: db.database,
+          prefix: db.prefix,
+          tables: db.tables,
+          counts: {
+            impressions: db.impressions,
+            users: db.users,
+            drafts: db.drafts,
+          },
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        botMode: config.botMode,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   if (bot && config.botMode === "webhook") {

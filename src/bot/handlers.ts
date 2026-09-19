@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { analyzeImpression, formatAiAnalysis } from "../ai/analyze.js";
 import { config } from "../config.js";
+import { getDbStatus } from "../db/index.js";
 import {
   clearDraft,
   createImpression,
@@ -40,6 +41,7 @@ import {
   CONTEXT_LABELS,
   STATUS_LABELS,
   TYPE_LABELS,
+  URGENCY_LEVELS,
 } from "../types.js";
 import {
   confirmKeyboard,
@@ -121,6 +123,52 @@ function draftSummary(draft: DraftPayload): string {
   ].join("\n");
 }
 
+function rememberPromptMessage(
+  draft: DraftPayload,
+  chatId: number,
+  messageId: number,
+): void {
+  draft.promptChatId = chatId;
+  draft.promptMessageId = messageId;
+}
+
+/** Keep the wizard on one bot message (edit); fall back to reply if needed. */
+async function setDraftPrompt(
+  ctx: AppContext,
+  userId: number,
+  draft: DraftPayload,
+  text: string,
+  extra: { parse_mode?: "Markdown" | "HTML"; reply_markup?: InlineKeyboard },
+): Promise<void> {
+  const chatId = draft.promptChatId ?? ctx.chat?.id;
+  const messageId = draft.promptMessageId;
+
+  if (chatId != null && messageId != null) {
+    try {
+      await ctx.api.editMessageText(chatId, messageId, text, extra);
+      await saveDraft(userId, draft);
+      return;
+    } catch {
+      // Message too old / deleted / not modified — send a fresh prompt.
+    }
+  }
+
+  const sent = await ctx.reply(text, extra);
+  rememberPromptMessage(draft, sent.chat.id, sent.message_id);
+  await saveDraft(userId, draft);
+}
+
+async function tryDeleteUserMessage(ctx: AppContext): Promise<void> {
+  const chatId = ctx.chat?.id;
+  const messageId = ctx.message?.message_id;
+  if (chatId == null || messageId == null) return;
+  try {
+    await ctx.api.deleteMessage(chatId, messageId);
+  } catch {
+    // Private chats usually allow this; ignore if Telegram refuses.
+  }
+}
+
 export function createBot(token: string): Bot {
   const bot = new Bot(token);
 
@@ -141,8 +189,40 @@ export function createBot(token: string): Bot {
         "/id — your Telegram user ID",
         "/whoami — your role and how it was resolved",
         "/chatid — this chat's ID (run inside a group)",
+        "/dbstatus — MySQL database & row counts (admin)",
       ].join("\n"),
     );
+  });
+
+  bot.command("dbstatus", async (ctx) => {
+    const user = await ensureUser(ctx);
+    if (!user || !isAdmin(user)) {
+      await ctx.reply("Admins only.");
+      return;
+    }
+    try {
+      const db = await getDbStatus();
+      await ctx.reply(
+        [
+          "*MySQL status*",
+          `Host: \`${escapeMd(db.host)}:${db.port}\``,
+          `Database: \`${escapeMd(db.database)}\``,
+          `Prefix: \`${escapeMd(db.prefix || "(none)")}\``,
+          `Tables: ${db.tables.length ? escapeMd(db.tables.join(", ")) : "_(none)_"}`,
+          "",
+          `Users: ${db.users}`,
+          `Impressions: ${db.impressions}`,
+          `Drafts: ${db.drafts}`,
+          "",
+          "_In phpMyAdmin open this database, then table_ `watchmen_impressions`",
+        ].join("\n"),
+        { parse_mode: "Markdown" },
+      );
+    } catch (err) {
+      await ctx.reply(
+        `DB error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   });
 
   bot.command("id", async (ctx) => {
@@ -271,7 +351,7 @@ export function createBot(token: string): Bot {
   bot.callbackQuery("draft:cancel", async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    clearDraft(user.telegram_id);
+    await clearDraft(user.telegram_id);
     await ctx.answerCallbackQuery("Cancelled");
     await showHome(ctx);
   });
@@ -279,17 +359,31 @@ export function createBot(token: string): Bot {
   bot.callbackQuery("draft:interpretation:skip", async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) {
       await ctx.answerCallbackQuery("No draft");
       return;
     }
     draft.interpretation = undefined;
     draft.step = "type";
-    saveDraft(user.telegram_id, draft);
+    if (ctx.callbackQuery.message && "message_id" in ctx.callbackQuery.message) {
+      rememberPromptMessage(
+        draft,
+        ctx.callbackQuery.message.chat.id,
+        ctx.callbackQuery.message.message_id,
+      );
+    }
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      "Select *type of impression*:",
+      [
+        "*Step 3 — Type*",
+        "",
+        `*Perceived:* ${escapeMd(draft.perceived ?? "—")}`,
+        "*Interpretation:* _(none)_",
+        "",
+        "Select *type of impression*:",
+      ].join("\n"),
       { parse_mode: "Markdown", reply_markup: typeKeyboard() },
     );
   });
@@ -297,11 +391,11 @@ export function createBot(token: string): Bot {
   bot.callbackQuery(/^draft:type:(.+)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) return;
     draft.type = ctx.match![1] as ImpressionType;
     draft.step = "context";
-    saveDraft(user.telegram_id, draft);
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText("Select *context*:", {
       parse_mode: "Markdown",
@@ -312,11 +406,11 @@ export function createBot(token: string): Bot {
   bot.callbackQuery(/^draft:context:(.+)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) return;
     draft.context = ctx.match![1] as ContextType;
     draft.step = "urgency";
-    saveDraft(user.telegram_id, draft);
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText("Select *urgency* (if applicable):", {
       parse_mode: "Markdown",
@@ -327,11 +421,11 @@ export function createBot(token: string): Bot {
   bot.callbackQuery(/^draft:urgency:(.+)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) return;
     draft.urgency = ctx.match![1] as Urgency;
     draft.step = "prayed";
-    saveDraft(user.telegram_id, draft);
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText("Have you already prayed about this?", {
       reply_markup: yesNoKeyboard("draft:prayed"),
@@ -341,11 +435,11 @@ export function createBot(token: string): Bot {
   bot.callbackQuery(/^draft:prayed:(yes|no)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) return;
     draft.prayed = ctx.match![1] === "yes";
     draft.step = "confidential";
-    saveDraft(user.telegram_id, draft);
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
       "Is this confidential / sensitive information?",
@@ -356,11 +450,11 @@ export function createBot(token: string): Bot {
   bot.callbackQuery(/^draft:confidential:(yes|no)$/, async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) return;
     draft.confidential = ctx.match![1] === "yes";
     draft.step = "confirm";
-    saveDraft(user.telegram_id, draft);
+    await saveDraft(user.telegram_id, draft);
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(`${draftSummary(draft)}\n\nSubmit this impression?`, {
       parse_mode: "Markdown",
@@ -371,73 +465,103 @@ export function createBot(token: string): Bot {
   bot.callbackQuery("draft:submit", async (ctx) => {
     const user = await ensureUser(ctx);
     if (!user) return;
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
+    // == null so urgency "none" stays valid (it is a real level, not "missing").
     if (
-      !draft?.perceived ||
+      !draft?.perceived?.trim() ||
       !draft.type ||
       !draft.context ||
-      !draft.urgency ||
+      draft.urgency == null ||
+      !(URGENCY_LEVELS as readonly string[]).includes(draft.urgency) ||
       draft.prayed == null ||
       draft.confidential == null
     ) {
-      await ctx.answerCallbackQuery("Draft incomplete");
+      console.warn("draft:submit incomplete", user.telegram_id, draft);
+      await ctx.answerCallbackQuery({
+        text: "Draft incomplete — start again with /new",
+        show_alert: true,
+      });
       return;
     }
 
-    await ctx.answerCallbackQuery("Saving…");
-    const impression = createImpression({
-      watchmanId: user.telegram_id,
-      watchmanName: user.display_name,
-      perceived: draft.perceived,
-      interpretation: draft.interpretation,
-      type: draft.type,
-      context: draft.context,
-      urgency: draft.urgency,
-      prayed: draft.prayed,
-      confidential: draft.confidential,
-    });
-    clearDraft(user.telegram_id);
+    const perceived = draft.perceived.trim();
+    const type = draft.type;
+    const context = draft.context;
+    const urgency = draft.urgency;
+    const prayed = draft.prayed;
+    const confidential = draft.confidential;
 
-    const recent = listImpressionsForLeaders({
-      includeConfidential: false,
-      limit: 30,
-    }).filter((i) => i.id !== impression.id);
+    try {
+      await ctx.answerCallbackQuery("Saving…");
+      const impression = await createImpression({
+        watchmanId: user.telegram_id,
+        watchmanName: user.display_name,
+        perceived,
+        interpretation: draft.interpretation,
+        type,
+        context,
+        urgency,
+        prayed,
+        confidential,
+      });
+      await clearDraft(user.telegram_id);
 
-    const analysis = await analyzeImpression(impression, recent);
-    setAiFields(impression.id, analysis.topicCluster, analysis.recommendation);
-    const saved = getImpression(impression.id)!;
+      const recent = (
+        await listImpressionsForLeaders({
+          includeConfidential: false,
+          limit: 30,
+        })
+      ).filter((i) => i.id !== impression.id);
 
-    await ctx.editMessageText(
-      [
-        "✅ *Impression recorded*",
-        "",
-        formatImpression(saved),
-        "",
-        "*AI structuring (not spiritual authority):*",
-        formatAiAnalysis(analysis),
-      ].join("\n"),
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("« Menu", "menu:home"),
-      },
-    );
+      const analysis = await analyzeImpression(impression, recent);
+      await setAiFields(
+        impression.id,
+        analysis.topicCluster,
+        analysis.recommendation,
+      );
+      const saved = (await getImpression(impression.id))!;
 
-    // Notify leaders (non-confidential summary for confidential items)
-    const leaders = listUsers().filter((u) => isLeaderOrAdmin(u));
-    for (const leader of leaders) {
-      if (leader.telegram_id === user.telegram_id) continue;
+      await ctx.editMessageText(
+        [
+          "✅ *Impression recorded*",
+          "",
+          formatImpression(saved),
+          "",
+          "*AI structuring (not spiritual authority):*",
+          formatAiAnalysis(analysis),
+        ].join("\n"),
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard().text("« Menu", "menu:home"),
+        },
+      );
+
+      // Notify leaders (non-confidential summary for confidential items)
+      const leaders = (await listUsers()).filter((u) => isLeaderOrAdmin(u));
+      for (const leader of leaders) {
+        if (leader.telegram_id === user.telegram_id) continue;
+        try {
+          const preview = saved.confidential
+            ? `🔒 Confidential impression #${saved.id} from ${saved.watchman_name} (details restricted). Open Leadership inbox.`
+            : `New impression #${saved.id} from ${saved.watchman_name}\nTopic: ${analysis.topicCluster}`;
+          await ctx.api.sendMessage(leader.telegram_id, preview, {
+            reply_markup: new InlineKeyboard().text(
+              "Open",
+              `imp:${saved.id}:view`,
+            ),
+          });
+        } catch {
+          // Leader may not have started the bot yet
+        }
+      }
+    } catch (err) {
+      console.error("draft:submit failed", err);
       try {
-        const preview = saved.confidential
-          ? `🔒 Confidential impression #${saved.id} from ${saved.watchman_name} (details restricted). Open Leadership inbox.`
-          : `New impression #${saved.id} from ${saved.watchman_name}\nTopic: ${analysis.topicCluster}`;
-        await ctx.api.sendMessage(leader.telegram_id, preview, {
-          reply_markup: new InlineKeyboard().text(
-            "Open",
-            `imp:${saved.id}:view`,
-          ),
-        });
+        await ctx.reply(
+          "⚠️ Could not save the impression. Please try /new again.",
+        );
       } catch {
-        // Leader may not have started the bot yet
+        // ignore
       }
     }
   });
@@ -455,7 +579,7 @@ export function createBot(token: string): Bot {
       return;
     }
     const id = Number(ctx.match![1]);
-    const imp = getImpression(id);
+    const imp = await getImpression(id);
     if (!imp) {
       await ctx.answerCallbackQuery({ text: "Not found", show_alert: true });
       return;
@@ -478,10 +602,10 @@ export function createBot(token: string): Bot {
     }
     const id = Number(ctx.match![1]);
     const status = ctx.match![2] as Status;
-    updateImpressionStatus(id, status, {
+    await updateImpressionStatus(id, status, {
       decisionNotes: `Set to ${STATUS_LABELS[status]} by ${user.display_name}`,
     });
-    const imp = getImpression(id)!;
+    const imp = (await getImpression(id))!;
     await ctx.answerCallbackQuery(`Status → ${STATUS_LABELS[status]}`);
     await ctx.editMessageText(formatImpression(imp), {
       parse_mode: "Markdown",
@@ -506,20 +630,20 @@ export function createBot(token: string): Bot {
       return;
     }
     const id = Number(ctx.match![1]);
-    const imp = getImpression(id);
+    const imp = await getImpression(id);
     if (!imp) {
       await ctx.answerCallbackQuery({ text: "Not found", show_alert: true });
       return;
     }
     const title = imp.topic_cluster || `${CONTEXT_LABELS[imp.context]} focus`;
-    const focus = createPrayerFocus({
+    const focus = await createPrayerFocus({
       title,
       leaderName: user.display_name,
       originNote: `From impression #${imp.id}`,
       impressionIds: [imp.id],
       durationWeeks: 4,
     });
-    updateImpressionStatus(id, "intercession", {
+    await updateImpressionStatus(id, "intercession", {
       decisionNotes: `Prayer focus #${focus.id} created`,
     });
     await ctx.answerCallbackQuery("Prayer focus created");
@@ -531,7 +655,7 @@ export function createBot(token: string): Bot {
         `Duration: ${focus.duration_weeks} weeks`,
         `Leader: ${escapeMd(focus.leader_name ?? "—")}`,
         `Origin: ${escapeMd(focus.origin_note ?? "—")}`,
-        `Linked watchmen: ${countIntercessorsLinked(focus.id)}`,
+        `Linked watchmen: ${await countIntercessorsLinked(focus.id)}`,
       ].join("\n"),
       {
         parse_mode: "Markdown",
@@ -548,7 +672,7 @@ export function createBot(token: string): Bot {
     }
     const targetId = Number(ctx.match![1]);
     const role = ctx.match![2] as "watcher" | "leader" | "admin";
-    setUserRole(targetId, role);
+    await setUserRole(targetId, role);
     await ctx.answerCallbackQuery(`Role set to ${role}`);
     await showRoles(ctx);
   });
@@ -561,7 +685,7 @@ export function createBot(token: string): Bot {
     }
     const id = Number(ctx.match![1]);
     const status = ctx.match![2] as "active" | "paused" | "completed";
-    setPrayerStatus(id, status);
+    await setPrayerStatus(id, status);
     await ctx.answerCallbackQuery(`Status → ${status}`);
     await showPrayer(ctx);
   });
@@ -573,7 +697,7 @@ export function createBot(token: string): Bot {
       return;
     }
     const id = Number(ctx.match![1]);
-    saveDraft(user.telegram_id, {
+    await saveDraft(user.telegram_id, {
       step: "perceived",
       perceived: `__prayer_update__:${id}`,
     });
@@ -614,7 +738,7 @@ export function createBot(token: string): Bot {
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
 
-    const draft = getDraft(user.telegram_id);
+    const draft = await getDraft(user.telegram_id);
     if (!draft) {
       await ctx.reply("Open the menu with /start or tap ✍️ Record impression.");
       return;
@@ -623,8 +747,8 @@ export function createBot(token: string): Bot {
     // Prayer update capture
     if (draft.perceived?.startsWith("__prayer_update__:")) {
       const id = Number(draft.perceived.split(":")[1]);
-      addPrayerUpdate(id, text);
-      clearDraft(user.telegram_id);
+      await addPrayerUpdate(id, text);
+      await clearDraft(user.telegram_id);
       await ctx.reply(`Update added to prayer focus #${id}.`, {
         reply_markup: new InlineKeyboard().text("« Prayer list", "menu:prayer"),
       });
@@ -634,14 +758,19 @@ export function createBot(token: string): Bot {
     if (draft.step === "perceived") {
       draft.perceived = text;
       draft.step = "interpretation";
-      saveDraft(user.telegram_id, draft);
-      await ctx.reply(
+      await saveDraft(user.telegram_id, draft);
+      await tryDeleteUserMessage(ctx);
+      await setDraftPrompt(
+        ctx,
+        user.telegram_id,
+        draft,
         [
-          "Recorded as *what you perceived*.",
+          "*Step 2 — Interpretation (optional)*",
           "",
-          "Now optionally add *your interpretation* (what you think it might mean).",
+          `*Perceived:* ${escapeMd(text)}`,
+          "",
+          "Add *your interpretation* (what you think it might mean), or skip.",
           "Keep this separate from the original perception.",
-          "Or skip.",
         ].join("\n"),
         {
           parse_mode: "Markdown",
@@ -654,11 +783,25 @@ export function createBot(token: string): Bot {
     if (draft.step === "interpretation") {
       draft.interpretation = text;
       draft.step = "type";
-      saveDraft(user.telegram_id, draft);
-      await ctx.reply("Select *type of impression*:", {
-        parse_mode: "Markdown",
-        reply_markup: typeKeyboard(),
-      });
+      await saveDraft(user.telegram_id, draft);
+      await tryDeleteUserMessage(ctx);
+      await setDraftPrompt(
+        ctx,
+        user.telegram_id,
+        draft,
+        [
+          "*Step 3 — Type*",
+          "",
+          `*Perceived:* ${escapeMd(draft.perceived ?? "—")}`,
+          `*Interpretation:* ${escapeMd(text)}`,
+          "",
+          "Select *type of impression*:",
+        ].join("\n"),
+        {
+          parse_mode: "Markdown",
+          reply_markup: typeKeyboard(),
+        },
+      );
       return;
     }
 
@@ -676,30 +819,41 @@ export function createBot(token: string): Bot {
 async function beginRecord(ctx: AppContext): Promise<void> {
   const user = await ensureUser(ctx);
   if (!user) return;
-  saveDraft(user.telegram_id, { step: "perceived" });
+  const draft: DraftPayload = { step: "perceived" };
   const msg = [
     "*Step 1 — What did you perceive?*",
     "",
     "Write only the original perception (not your interpretation yet).",
     "You can also describe a dream, image, verse, or prayer burden in free text.",
   ].join("\n");
-  if (ctx.callbackQuery) {
+  const markup = new InlineKeyboard().text("✖️ Cancel", "draft:cancel");
+
+  if (ctx.callbackQuery?.message && "message_id" in ctx.callbackQuery.message) {
+    rememberPromptMessage(
+      draft,
+      ctx.callbackQuery.message.chat.id,
+      ctx.callbackQuery.message.message_id,
+    );
+    await saveDraft(user.telegram_id, draft);
     await ctx.editMessageText(msg, {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("✖️ Cancel", "draft:cancel"),
+      reply_markup: markup,
     });
-  } else {
-    await ctx.reply(msg, {
-      parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("✖️ Cancel", "draft:cancel"),
-    });
+    return;
   }
+
+  const sent = await ctx.reply(msg, {
+    parse_mode: "Markdown",
+    reply_markup: markup,
+  });
+  rememberPromptMessage(draft, sent.chat.id, sent.message_id);
+  await saveDraft(user.telegram_id, draft);
 }
 
 async function showMyHistory(ctx: AppContext): Promise<void> {
   const user = await ensureUser(ctx);
   if (!user) return;
-  const items = listOwnImpressions(user.telegram_id, 8);
+  const items = await listOwnImpressions(user.telegram_id, 8);
   if (!items.length) {
     const empty = "No impressions yet. Tap ✍️ Record impression.";
     if (ctx.callbackQuery) {
@@ -742,11 +896,11 @@ async function showLeaderInbox(
 
   let items;
   if (filter === "open") {
-    items = listImpressionsForLeaders({ limit: 15 }).filter((i) =>
+    items = (await listImpressionsForLeaders({ limit: 15 })).filter((i) =>
       ["new", "review", "unconfirmed"].includes(i.status),
     );
   } else {
-    items = listImpressionsForLeaders({
+    items = await listImpressionsForLeaders({
       status: filter as Status,
       limit: 15,
     });
@@ -782,7 +936,7 @@ async function showRadar(ctx: AppContext): Promise<void> {
     await ctx.reply("Leadership access required.");
     return;
   }
-  const rows = topicRadar(10);
+  const rows = await topicRadar(10);
   const text = rows.length
     ? [
         "*Topic radar* (last 10 days)",
@@ -816,7 +970,7 @@ async function showPrayer(ctx: AppContext): Promise<void> {
     await ctx.reply("Leadership access required.");
     return;
   }
-  const focuses = listPrayerFocuses();
+  const focuses = await listPrayerFocuses();
   if (!focuses.length) {
     const empty =
       "No prayer focuses yet. Open an impression and tap “Make prayer focus”.";
@@ -865,7 +1019,7 @@ async function showLearning(ctx: AppContext): Promise<void> {
     await ctx.reply("Leadership access required.");
     return;
   }
-  const s = learningSummary();
+  const s = await learningSummary();
   const text = [
     "*History & learning*",
     "",
@@ -900,7 +1054,7 @@ async function showRoles(ctx: AppContext): Promise<void> {
     await ctx.reply("Admin access required.");
     return;
   }
-  const users = listUsers();
+  const users = await listUsers();
   const kb = new InlineKeyboard();
   const lines = ["*Users & roles*", ""];
   for (const u of users.slice(0, 20)) {

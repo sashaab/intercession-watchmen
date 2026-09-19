@@ -1,5 +1,4 @@
 import "dotenv/config";
-import path from "node:path";
 
 function idList(name: string): number[] {
   return (process.env[name] ?? "")
@@ -15,6 +14,16 @@ function chatId(name: string): number | null {
   if (!raw) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(
+      `Missing env: ${name}. Create a MySQL database in phpMyAdmin and set MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE.`,
+    );
+  }
+  return value;
 }
 
 const devPreview = process.env.DEV_PREVIEW === "1";
@@ -47,9 +56,15 @@ export const config = {
   openaiModel: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
   openaiBaseUrl:
     process.env.OPENAI_BASE_URL?.trim().replace(/\/$/, "") || "",
-  databasePath:
-    process.env.DATABASE_PATH?.trim() ||
-    path.join(process.cwd(), "data", "watchmen.db"),
+  mysql: {
+    host: requiredEnv("MYSQL_HOST"),
+    port: Number(process.env.MYSQL_PORT || 3306),
+    user: requiredEnv("MYSQL_USER"),
+    password: process.env.MYSQL_PASSWORD ?? "",
+    database: requiredEnv("MYSQL_DATABASE"),
+    /** Prefix so tables can live inside a shared DB like icf_english_db. */
+    tablePrefix: process.env.MYSQL_TABLE_PREFIX?.trim() || "watchmen_",
+  },
   port: Number(process.env.PORT || 3000),
   webappUrl,
   webhookPath: "/telegram/webhook",

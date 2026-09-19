@@ -1,7 +1,15 @@
-import { getDb } from "../db/index.js";
+import { asNumber, exec, getPool, queryOne, queryRows, tables } from "../db/index.js";
 import type { PrayerFocusRow } from "../types.js";
 
-export function createPrayerFocus(input: {
+function mapFocus(row: PrayerFocusRow): PrayerFocusRow {
+  return {
+    ...row,
+    id: Number(row.id),
+    duration_weeks: Number(row.duration_weeks),
+  };
+}
+
+export async function createPrayerFocus(input: {
   title: string;
   durationWeeks?: number;
   leaderName?: string;
@@ -9,95 +17,111 @@ export function createPrayerFocus(input: {
   sharedWith?: string;
   reviewDate?: string;
   impressionIds?: number[];
-}): PrayerFocusRow {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO prayer_focuses (
-        title, duration_weeks, leader_name, origin_note, shared_with, review_date
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+}): Promise<PrayerFocusRow> {
+  const result = await exec(
+    `INSERT INTO ${tables.prayerFocuses} (
+      title, duration_weeks, leader_name, origin_note, shared_with, review_date
+    ) VALUES (?, ?, ?, ?, ?, ?)`,
+    [
       input.title,
       input.durationWeeks ?? 4,
       input.leaderName ?? null,
       input.originNote ?? null,
       input.sharedWith ?? null,
       input.reviewDate ?? null,
-    );
+    ],
+  );
 
-  const id = Number(result.lastInsertRowid);
+  const id = Number(result.insertId);
   if (input.impressionIds?.length) {
-    const link = db.prepare(
-      `INSERT OR IGNORE INTO prayer_focus_impressions (prayer_focus_id, impression_id)
-       VALUES (?, ?)`,
-    );
-    const tx = db.transaction((ids: number[]) => {
-      for (const impressionId of ids) link.run(id, impressionId);
-    });
-    tx(input.impressionIds);
+    const conn = await getPool().getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const impressionId of input.impressionIds) {
+        await conn.query(
+          `INSERT IGNORE INTO ${tables.prayerFocusImpressions} (prayer_focus_id, impression_id)
+           VALUES (?, ?)`,
+          [id, impressionId],
+        );
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
-  return getPrayerFocus(id)!;
+  return (await getPrayerFocus(id))!;
 }
 
-export function getPrayerFocus(id: number): PrayerFocusRow | undefined {
-  return getDb()
-    .prepare("SELECT * FROM prayer_focuses WHERE id = ?")
-    .get(id) as PrayerFocusRow | undefined;
+export async function getPrayerFocus(
+  id: number,
+): Promise<PrayerFocusRow | undefined> {
+  const row = await queryOne<PrayerFocusRow>(
+    `SELECT * FROM ${tables.prayerFocuses} WHERE id = ?`,
+    [id],
+  );
+  return row ? mapFocus(row) : undefined;
 }
 
-export function listPrayerFocuses(status?: string): PrayerFocusRow[] {
+export async function listPrayerFocuses(
+  status?: string,
+): Promise<PrayerFocusRow[]> {
   if (status) {
-    return getDb()
-      .prepare(
-        `SELECT * FROM prayer_focuses WHERE status = ? ORDER BY datetime(created_at) DESC`,
-      )
-      .all(status) as PrayerFocusRow[];
+    const rows = await queryRows<PrayerFocusRow>(
+      `SELECT * FROM ${tables.prayerFocuses} WHERE status = ? ORDER BY created_at DESC`,
+      [status],
+    );
+    return rows.map(mapFocus);
   }
-  return getDb()
-    .prepare(`SELECT * FROM prayer_focuses ORDER BY datetime(created_at) DESC`)
-    .all() as PrayerFocusRow[];
+  const rows = await queryRows<PrayerFocusRow>(
+    `SELECT * FROM ${tables.prayerFocuses} ORDER BY created_at DESC`,
+  );
+  return rows.map(mapFocus);
 }
 
-export function addPrayerUpdate(id: number, updateText: string): void {
-  const current = getPrayerFocus(id);
+export async function addPrayerUpdate(
+  id: number,
+  updateText: string,
+): Promise<void> {
+  const current = await getPrayerFocus(id);
   if (!current) return;
   const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
   const next = current.updates
     ? `${current.updates}\n• [${stamp}] ${updateText}`
     : `• [${stamp}] ${updateText}`;
-  getDb()
-    .prepare(
-      `UPDATE prayer_focuses SET updates = ?, updated_at = datetime('now') WHERE id = ?`,
-    )
-    .run(next, id);
+  await exec(
+    `UPDATE ${tables.prayerFocuses} SET updates = ?, updated_at = NOW() WHERE id = ?`,
+    [next, id],
+  );
 }
 
-export function setPrayerStatus(
+export async function setPrayerStatus(
   id: number,
   status: "active" | "paused" | "completed",
   reflection?: string,
-): void {
-  getDb()
-    .prepare(
-      `UPDATE prayer_focuses SET
-        status = ?,
-        reflection = COALESCE(?, reflection),
-        updated_at = datetime('now')
-      WHERE id = ?`,
-    )
-    .run(status, reflection ?? null, id);
+): Promise<void> {
+  await exec(
+    `UPDATE ${tables.prayerFocuses} SET
+      status = ?,
+      reflection = COALESCE(?, reflection),
+      updated_at = NOW()
+    WHERE id = ?`,
+    [status, reflection ?? null, id],
+  );
 }
 
-export function countIntercessorsLinked(prayerFocusId: number): number {
-  const row = getDb()
-    .prepare(
-      `SELECT COUNT(DISTINCT i.watchman_id) AS c
-       FROM prayer_focus_impressions pfi
-       JOIN impressions i ON i.id = pfi.impression_id
-       WHERE pfi.prayer_focus_id = ?`,
-    )
-    .get(prayerFocusId) as { c: number };
-  return row.c;
+export async function countIntercessorsLinked(
+  prayerFocusId: number,
+): Promise<number> {
+  const row = await queryOne<{ c: number }>(
+    `SELECT COUNT(DISTINCT i.watchman_id) AS c
+     FROM ${tables.prayerFocusImpressions} pfi
+     JOIN ${tables.impressions} i ON i.id = pfi.impression_id
+     WHERE pfi.prayer_focus_id = ?`,
+    [prayerFocusId],
+  );
+  return asNumber(row?.c);
 }

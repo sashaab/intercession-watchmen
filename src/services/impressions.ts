@@ -1,4 +1,4 @@
-import { getDb } from "../db/index.js";
+import { asNumber, exec, queryOne, queryRows, tables } from "../db/index.js";
 import type {
   ContextType,
   ImpressionRow,
@@ -24,6 +24,9 @@ export type DraftPayload = {
   urgency?: Urgency;
   prayed?: boolean;
   confidential?: boolean;
+  /** Bot prompt message to edit so the wizard stays one message. */
+  promptChatId?: number;
+  promptMessageId?: number;
 };
 
 export type CreateImpressionInput = {
@@ -40,42 +43,82 @@ export type CreateImpressionInput = {
   aiRecommendation?: string | null;
 };
 
-export function getDraft(telegramId: number): DraftPayload | null {
-  const row = getDb()
-    .prepare("SELECT payload FROM draft_impressions WHERE telegram_id = ?")
-    .get(telegramId) as { payload: string } | undefined;
+function mapImpression(row: ImpressionRow): ImpressionRow {
+  return {
+    ...row,
+    id: Number(row.id),
+    watchman_id: Number(row.watchman_id),
+    prayed: Number(row.prayed),
+    confidential: Number(row.confidential),
+  };
+}
+
+/** In-process cache so submit still works if MySQL upsert is flaky. */
+const draftCache = new Map<number, DraftPayload>();
+
+function cloneDraft(draft: DraftPayload): DraftPayload {
+  return JSON.parse(JSON.stringify(draft)) as DraftPayload;
+}
+
+function parseDraftPayload(payload: unknown): DraftPayload | null {
+  if (payload == null) return null;
+  if (typeof payload === "object") return payload as DraftPayload;
+  const raw = typeof payload === "string" ? payload : String(payload);
+  if (!raw.trim()) return null;
+  try {
+    return JSON.parse(raw) as DraftPayload;
+  } catch {
+    return null;
+  }
+}
+
+export async function getDraft(telegramId: number): Promise<DraftPayload | null> {
+  const cached = draftCache.get(telegramId);
+  if (cached) return cloneDraft(cached);
+
+  const row = await queryOne<{ payload: unknown }>(
+    `SELECT payload FROM ${tables.draftImpressions} WHERE telegram_id = ?`,
+    [telegramId],
+  );
   if (!row) return null;
-  return JSON.parse(row.payload) as DraftPayload;
+  const draft = parseDraftPayload(row.payload);
+  if (draft) draftCache.set(telegramId, cloneDraft(draft));
+  return draft;
 }
 
-export function saveDraft(telegramId: number, draft: DraftPayload): void {
-  getDb()
-    .prepare(
-      `INSERT INTO draft_impressions (telegram_id, payload, updated_at)
-       VALUES (?, ?, datetime('now'))
-       ON CONFLICT(telegram_id) DO UPDATE SET
-         payload = excluded.payload,
-         updated_at = datetime('now')`,
-    )
-    .run(telegramId, JSON.stringify(draft));
+export async function saveDraft(
+  telegramId: number,
+  draft: DraftPayload,
+): Promise<void> {
+  const payload = JSON.stringify(draft);
+  draftCache.set(telegramId, cloneDraft(draft));
+  // Bound params on UPDATE — works on MySQL 8 and MariaDB (no AS-alias / VALUES()).
+  await exec(
+    `INSERT INTO ${tables.draftImpressions} (telegram_id, payload, updated_at)
+     VALUES (?, ?, NOW())
+     ON DUPLICATE KEY UPDATE
+       payload = ?,
+       updated_at = NOW()`,
+    [telegramId, payload, payload],
+  );
 }
 
-export function clearDraft(telegramId: number): void {
-  getDb()
-    .prepare("DELETE FROM draft_impressions WHERE telegram_id = ?")
-    .run(telegramId);
+export async function clearDraft(telegramId: number): Promise<void> {
+  draftCache.delete(telegramId);
+  await exec(`DELETE FROM ${tables.draftImpressions} WHERE telegram_id = ?`, [
+    telegramId,
+  ]);
 }
 
-export function createImpression(input: CreateImpressionInput): ImpressionRow {
-  const db = getDb();
-  const result = db
-    .prepare(
-      `INSERT INTO impressions (
-        watchman_id, watchman_name, perceived, interpretation, type, context,
-        urgency, prayed, confidential, topic_cluster, ai_recommendation
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+export async function createImpression(
+  input: CreateImpressionInput,
+): Promise<ImpressionRow> {
+  const result = await exec(
+    `INSERT INTO ${tables.impressions} (
+      watchman_id, watchman_name, perceived, interpretation, type, context,
+      urgency, prayed, confidential, topic_cluster, ai_recommendation
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       input.watchmanId,
       input.watchmanName,
       input.perceived,
@@ -87,36 +130,41 @@ export function createImpression(input: CreateImpressionInput): ImpressionRow {
       input.confidential ? 1 : 0,
       input.topicCluster ?? null,
       input.aiRecommendation ?? null,
-    );
+    ],
+  );
 
-  return getImpression(Number(result.lastInsertRowid))!;
+  return (await getImpression(Number(result.insertId)))!;
 }
 
-export function getImpression(id: number): ImpressionRow | undefined {
-  return getDb()
-    .prepare("SELECT * FROM impressions WHERE id = ?")
-    .get(id) as ImpressionRow | undefined;
+export async function getImpression(
+  id: number,
+): Promise<ImpressionRow | undefined> {
+  const row = await queryOne<ImpressionRow>(
+    `SELECT * FROM ${tables.impressions} WHERE id = ?`,
+    [id],
+  );
+  return row ? mapImpression(row) : undefined;
 }
 
-export function listOwnImpressions(
+export async function listOwnImpressions(
   watchmanId: number,
   limit = 10,
-): ImpressionRow[] {
-  return getDb()
-    .prepare(
-      `SELECT * FROM impressions
-       WHERE watchman_id = ?
-       ORDER BY datetime(created_at) DESC
-       LIMIT ?`,
-    )
-    .all(watchmanId, limit) as ImpressionRow[];
+): Promise<ImpressionRow[]> {
+  const rows = await queryRows<ImpressionRow>(
+    `SELECT * FROM ${tables.impressions}
+     WHERE watchman_id = ?
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    [watchmanId, limit],
+  );
+  return rows.map(mapImpression);
 }
 
-export function listImpressionsForLeaders(opts?: {
+export async function listImpressionsForLeaders(opts?: {
   status?: Status;
   includeConfidential?: boolean;
   limit?: number;
-}): ImpressionRow[] {
+}): Promise<ImpressionRow[]> {
   const limit = opts?.limit ?? 20;
   const includeConfidential = opts?.includeConfidential ?? true;
   const params: Array<string | number> = [];
@@ -130,18 +178,18 @@ export function listImpressionsForLeaders(opts?: {
     where.push("confidential = 0");
   }
 
-  const sql = `SELECT * FROM impressions
+  const sql = `SELECT * FROM ${tables.impressions}
     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
     ORDER BY
       CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
-      datetime(created_at) DESC
+      created_at DESC
     LIMIT ?`;
   params.push(limit);
 
-  return getDb().prepare(sql).all(...params) as ImpressionRow[];
+  return (await queryRows<ImpressionRow>(sql, params)).map(mapImpression);
 }
 
-export function updateImpressionStatus(
+export async function updateImpressionStatus(
   id: number,
   status: Status,
   extras?: {
@@ -149,110 +197,122 @@ export function updateImpressionStatus(
     outcome?: string;
     forwardedTo?: string;
   },
-): void {
-  getDb()
-    .prepare(
-      `UPDATE impressions SET
-        status = ?,
-        decision_notes = COALESCE(?, decision_notes),
-        outcome = COALESCE(?, outcome),
-        forwarded_to = COALESCE(?, forwarded_to),
-        updated_at = datetime('now')
-      WHERE id = ?`,
-    )
-    .run(
+): Promise<void> {
+  await exec(
+    `UPDATE ${tables.impressions} SET
+      status = ?,
+      decision_notes = COALESCE(?, decision_notes),
+      outcome = COALESCE(?, outcome),
+      forwarded_to = COALESCE(?, forwarded_to),
+      updated_at = NOW()
+    WHERE id = ?`,
+    [
       status,
       extras?.decisionNotes ?? null,
       extras?.outcome ?? null,
       extras?.forwardedTo ?? null,
       id,
-    );
+    ],
+  );
 }
 
-export function setAiFields(
+export async function setAiFields(
   id: number,
   topicCluster: string | null,
   aiRecommendation: string | null,
-): void {
-  getDb()
-    .prepare(
-      `UPDATE impressions SET
-        topic_cluster = ?,
-        ai_recommendation = ?,
-        updated_at = datetime('now')
-      WHERE id = ?`,
-    )
-    .run(topicCluster, aiRecommendation, id);
+): Promise<void> {
+  await exec(
+    `UPDATE ${tables.impressions} SET
+      topic_cluster = ?,
+      ai_recommendation = ?,
+      updated_at = NOW()
+    WHERE id = ?`,
+    [topicCluster, aiRecommendation, id],
+  );
 }
 
-export function countByStatus(): Record<string, number> {
-  const rows = getDb()
-    .prepare(
-      `SELECT status, COUNT(*) AS c FROM impressions GROUP BY status`,
-    )
-    .all() as Array<{ status: string; c: number }>;
-  return Object.fromEntries(rows.map((r) => [r.status, r.c]));
+export async function countByStatus(): Promise<Record<string, number>> {
+  const rows = await queryRows<{ status: string; c: number }>(
+    `SELECT status, COUNT(*) AS c FROM ${tables.impressions} GROUP BY status`,
+  );
+  return Object.fromEntries(rows.map((r) => [r.status, asNumber(r.c)]));
 }
 
-export function topicRadar(days = 10): Array<{
-  topic: string;
-  count: number;
-  watchmen: number;
-  sample_ids: string;
-}> {
-  return getDb()
-    .prepare(
-      `SELECT
-         COALESCE(topic_cluster, context || ' / ' || type) AS topic,
-         COUNT(*) AS count,
-         COUNT(DISTINCT watchman_id) AS watchmen,
-         GROUP_CONCAT(id) AS sample_ids
-       FROM impressions
-       WHERE datetime(created_at) >= datetime('now', ?)
-         AND confidential = 0
-       GROUP BY topic
-       HAVING COUNT(*) >= 2 AND COUNT(DISTINCT watchman_id) >= 2
-       ORDER BY count DESC
-       LIMIT 15`,
-    )
-    .all(`-${days} days`) as Array<{
+export async function topicRadar(days = 10): Promise<
+  Array<{
     topic: string;
     count: number;
     watchmen: number;
     sample_ids: string;
-  }>;
+  }>
+> {
+  const windowDays = Math.max(1, Math.min(365, Number(days) || 10));
+  const rows = await queryRows<{
+    topic: string;
+    count: number;
+    watchmen: number;
+    sample_ids: string;
+  }>(
+    `SELECT
+       COALESCE(topic_cluster, CONCAT(context, ' / ', type)) AS topic,
+       COUNT(*) AS count,
+       COUNT(DISTINCT watchman_id) AS watchmen,
+       GROUP_CONCAT(id) AS sample_ids
+     FROM ${tables.impressions}
+     WHERE created_at >= DATE_SUB(NOW(), INTERVAL ${windowDays} DAY)
+       AND confidential = 0
+     GROUP BY topic
+     HAVING COUNT(*) >= 2 AND COUNT(DISTINCT watchman_id) >= 2
+     ORDER BY count DESC
+     LIMIT 15`,
+  );
+  return rows.map((r) => ({
+    ...r,
+    count: asNumber(r.count),
+    watchmen: asNumber(r.watchmen),
+  }));
 }
 
-export function learningSummary(): {
+export async function learningSummary(): Promise<{
   total: number;
   completed: number;
   noAction: number;
   repeatedTopics: Array<{ topic: string; c: number }>;
-} {
-  const db = getDb();
-  const total = (
-    db.prepare("SELECT COUNT(*) AS c FROM impressions").get() as { c: number }
-  ).c;
-  const completed = (
-    db
-      .prepare("SELECT COUNT(*) AS c FROM impressions WHERE status = 'completed'")
-      .get() as { c: number }
-  ).c;
-  const noAction = (
-    db
-      .prepare("SELECT COUNT(*) AS c FROM impressions WHERE status = 'no_action'")
-      .get() as { c: number }
-  ).c;
-  const repeatedTopics = db
-    .prepare(
+}> {
+  const total =
+    asNumber(
+      (
+        await queryOne<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM ${tables.impressions}`,
+        )
+      )?.c,
+    ) || 0;
+  const completed =
+    asNumber(
+      (
+        await queryOne<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM ${tables.impressions} WHERE status = 'completed'`,
+        )
+      )?.c,
+    ) || 0;
+  const noAction =
+    asNumber(
+      (
+        await queryOne<{ c: number }>(
+          `SELECT COUNT(*) AS c FROM ${tables.impressions} WHERE status = 'no_action'`,
+        )
+      )?.c,
+    ) || 0;
+  const repeatedTopics = (
+    await queryRows<{ topic: string; c: number }>(
       `SELECT COALESCE(topic_cluster, context) AS topic, COUNT(*) AS c
-       FROM impressions
+       FROM ${tables.impressions}
        GROUP BY topic
        HAVING c >= 2
        ORDER BY c DESC
        LIMIT 10`,
     )
-    .all() as Array<{ topic: string; c: number }>;
+  ).map((r) => ({ topic: r.topic, c: asNumber(r.c) }));
 
   return { total, completed, noAction, repeatedTopics };
 }

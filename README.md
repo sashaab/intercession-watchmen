@@ -23,6 +23,12 @@ LEADER_IDS=ваш_id
 DEV_PREVIEW=1
 DEV_PREVIEW_USER_ID=ваш_id
 PORT=3000
+MYSQL_HOST=icl-english_db_db-3306.easypanel.host
+MYSQL_PORT=3306
+MYSQL_USER=
+MYSQL_PASSWORD=
+MYSQL_DATABASE=icf_watchmen
+MYSQL_TABLE_PREFIX=watchmen_
 ```
 
 2. Запуск:
@@ -83,8 +89,9 @@ WEBAPP_URL=https://ваш-туннель.trycloudflare.com
 ```
 src/          bot + API + AI
 public/       Mini App (HTML/CSS/JS)
-data/         SQLite
 ```
+
+Данные хранятся в **MySQL** в базе `icf_watchmen` (таблицы с префиксом `watchmen_`). Нужны `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`.
 
 ## Дальше
 

@@ -14,11 +14,37 @@ Builder: **Dockerfile** (файл уже в корне проекта).
 - Port: **3000**
 - Включите HTTPS
 
-## 3. Storage (важно для SQLite)
+## 3. MySQL
 
-Mount:
-- Mount Path: `/app/data`
-- иначе база сотрётся при каждом редеплое
+Создайте отдельную базу в phpMyAdmin (SQL или **New**):
+
+```sql
+CREATE DATABASE icf_watchmen CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+Она появится в группе `icf` рядом с `icf_english_db`.
+
+В EasyPanel у сервиса Watchmen:
+
+```env
+MYSQL_HOST=icl-english_db
+MYSQL_PORT=3306
+MYSQL_USER=
+MYSQL_PASSWORD=
+MYSQL_DATABASE=icf_watchmen
+MYSQL_TABLE_PREFIX=watchmen_
+```
+
+`MYSQL_HOST` внутри EasyPanel — имя MySQL-сервиса (как в списке сервисов), не публичный `*.easypanel.host`.
+
+Пользователю MySQL нужны права на `icf_watchmen` (**CREATE**, SELECT, INSERT, UPDATE, DELETE). Таблицы создадутся сами при старте приложения.
+
+Если в phpMyAdmin у `icf_watchmen` написано **No tables found** — приложение либо не стартовало с этой БД, либо у пользователя нет CREATE. Тогда:
+1. Проверьте `MYSQL_DATABASE=icf_watchmen` и логи старта (`MySQL tables: watchmen_…`).
+2. Или вручную: phpMyAdmin → `icf_watchmen` → **SQL** → выполните файл `sql/schema.sql` из репозитория.
+3. Redeploy / Restart сервиса.
+
+Volume `/app/data` больше не нужен.
 
 ## 4. Environment
 
@@ -27,10 +53,16 @@ BOT_TOKEN=
 ADMIN_CHAT_ID=
 LEADER_CHAT_ID=
 PORT=3000
-DATABASE_PATH=/app/data/watchmen.db
 DEV_PREVIEW=0
 WEBAPP_URL=https://$(PRIMARY_DOMAIN)
 BOT_MODE=webhook
+
+MYSQL_HOST=icl-english_db
+MYSQL_PORT=3306
+MYSQL_USER=
+MYSQL_PASSWORD=
+MYSQL_DATABASE=icf_watchmen
+MYSQL_TABLE_PREFIX=watchmen_
 
 OPENAI_BASE_URL=https://ai-llm.hecosys.com/v1
 OPENAI_API_KEY=

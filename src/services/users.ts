@@ -1,5 +1,5 @@
 import { config, type Role } from "../config.js";
-import { getDb } from "../db/index.js";
+import { exec, queryOne, queryRows, tables } from "../db/index.js";
 import type { UserRow } from "../types.js";
 
 type CacheEntry = { role: Role; detail: string; at: number };
@@ -109,35 +109,39 @@ export function clearRoleCache(telegramId?: number): void {
   else membershipCache.delete(telegramId);
 }
 
-export function upsertUser(
+function mapUser(row: UserRow): UserRow {
+  return { ...row, telegram_id: Number(row.telegram_id) };
+}
+
+export async function upsertUser(
   telegramId: number,
   displayName: string,
   preferredRole?: Role,
-): UserRow {
-  const db = getDb();
-  const existing = db
-    .prepare("SELECT * FROM users WHERE telegram_id = ?")
-    .get(telegramId) as UserRow | undefined;
+): Promise<UserRow> {
+  const existing = await queryOne<UserRow>(
+    `SELECT * FROM ${tables.users} WHERE telegram_id = ?`,
+    [telegramId],
+  );
 
   if (existing) {
-    if (existing.display_name !== displayName) {
-      db.prepare("UPDATE users SET display_name = ? WHERE telegram_id = ?").run(
-        displayName,
-        telegramId,
+    const user = mapUser(existing);
+    if (user.display_name !== displayName) {
+      await exec(
+        `UPDATE ${tables.users} SET display_name = ? WHERE telegram_id = ?`,
+        [displayName, telegramId],
       );
-      return { ...existing, display_name: displayName };
+      return { ...user, display_name: displayName };
     }
-    return existing;
+    return user;
   }
 
   const role = preferredRole ?? resolveBootstrapRole(telegramId);
-  db.prepare(
-    "INSERT INTO users (telegram_id, display_name, role) VALUES (?, ?, ?)",
-  ).run(telegramId, displayName, role);
+  await exec(
+    `INSERT INTO ${tables.users} (telegram_id, display_name, role) VALUES (?, ?, ?)`,
+    [telegramId, displayName, role],
+  );
 
-  return db
-    .prepare("SELECT * FROM users WHERE telegram_id = ?")
-    .get(telegramId) as UserRow;
+  return (await getUser(telegramId))!;
 }
 
 /** Upsert + sync role from chats / ID lists. */
@@ -146,33 +150,42 @@ export async function syncUser(
   displayName: string,
 ): Promise<UserRow & { roleDetail: string }> {
   const { role, detail } = await resolveRole(telegramId);
-  const user = upsertUser(telegramId, displayName, role);
+  const user = await upsertUser(telegramId, displayName, role);
   if (user.role !== role) {
-    setUserRole(telegramId, role);
+    await setUserRole(telegramId, role);
   }
   return {
-    ...getUser(telegramId)!,
+    ...(await getUser(telegramId))!,
     roleDetail: detail,
   };
 }
 
-export function getUser(telegramId: number): UserRow | undefined {
-  return getDb()
-    .prepare("SELECT * FROM users WHERE telegram_id = ?")
-    .get(telegramId) as UserRow | undefined;
+export async function getUser(
+  telegramId: number,
+): Promise<UserRow | undefined> {
+  const row = await queryOne<UserRow>(
+    `SELECT * FROM ${tables.users} WHERE telegram_id = ?`,
+    [telegramId],
+  );
+  return row ? mapUser(row) : undefined;
 }
 
-export function setUserRole(telegramId: number, role: Role): void {
-  getDb()
-    .prepare("UPDATE users SET role = ? WHERE telegram_id = ?")
-    .run(role, telegramId);
+export async function setUserRole(
+  telegramId: number,
+  role: Role,
+): Promise<void> {
+  await exec(`UPDATE ${tables.users} SET role = ? WHERE telegram_id = ?`, [
+    role,
+    telegramId,
+  ]);
   clearRoleCache(telegramId);
 }
 
-export function listUsers(): UserRow[] {
-  return getDb()
-    .prepare("SELECT * FROM users ORDER BY role, display_name")
-    .all() as UserRow[];
+export async function listUsers(): Promise<UserRow[]> {
+  const rows = await queryRows<UserRow>(
+    `SELECT * FROM ${tables.users} ORDER BY role, display_name`,
+  );
+  return rows.map(mapUser);
 }
 
 export function isLeaderOrAdmin(user: UserRow | undefined): boolean {

@@ -148,9 +148,9 @@ export function registerApi(app: Express): void {
     });
   });
 
-  app.get("/api/impressions/mine", (req, res) => {
+  app.get("/api/impressions/mine", async (req, res) => {
     const u = authed(req);
-    res.json({ items: listOwnImpressions(u.id, 30) });
+    res.json({ items: await listOwnImpressions(u.id, 30) });
   });
 
   app.post("/api/impressions", async (req, res) => {
@@ -170,7 +170,7 @@ export function registerApi(app: Express): void {
       return;
     }
 
-    const impression = createImpression({
+    const impression = await createImpression({
       watchmanId: u.id,
       watchmanName: u.displayName,
       perceived: body.perceived.trim(),
@@ -182,14 +182,16 @@ export function registerApi(app: Express): void {
       confidential: Boolean(body.confidential),
     });
 
-    const recent = listImpressionsForLeaders({
-      includeConfidential: false,
-      limit: 30,
-    }).filter((i) => i.id !== impression.id);
+    const recent = (
+      await listImpressionsForLeaders({
+        includeConfidential: false,
+        limit: 30,
+      })
+    ).filter((i) => i.id !== impression.id);
 
     const analysis = await analyzeImpression(impression, recent);
-    setAiFields(impression.id, analysis.topicCluster, analysis.recommendation);
-    const saved = getImpression(impression.id)!;
+    await setAiFields(impression.id, analysis.topicCluster, analysis.recommendation);
+    const saved = (await getImpression(impression.id))!;
 
     res.status(201).json({
       impression: saved,
@@ -198,18 +200,18 @@ export function registerApi(app: Express): void {
     });
   });
 
-  app.get("/api/inbox", requireLeader, (req, res) => {
+  app.get("/api/inbox", requireLeader, async (req, res) => {
     const status = String(req.query.status || "");
     const items = status
-      ? listImpressionsForLeaders({ status: status as Status, limit: 50 })
-      : listImpressionsForLeaders({ limit: 50 });
+      ? await listImpressionsForLeaders({ status: status as Status, limit: 50 })
+      : await listImpressionsForLeaders({ limit: 50 });
     res.json({ items });
   });
 
-  app.get("/api/impressions/:id", (req, res) => {
+  app.get("/api/impressions/:id", async (req, res) => {
     const u = authed(req);
     const id = Number(req.params.id);
-    const item = getImpression(id);
+    const item = await getImpression(id);
     if (!item) {
       res.status(404).json({ error: "Not found" });
       return;
@@ -225,7 +227,7 @@ export function registerApi(app: Express): void {
     res.json({ item });
   });
 
-  app.patch("/api/impressions/:id/status", requireLeader, (req, res) => {
+  app.patch("/api/impressions/:id/status", requireLeader, async (req, res) => {
     const u = authed(req);
     const id = Number(req.params.id);
     const body = req.body as {
@@ -238,38 +240,40 @@ export function registerApi(app: Express): void {
       res.status(400).json({ error: "Invalid status" });
       return;
     }
-    const existing = getImpression(id);
+    const existing = await getImpression(id);
     if (!existing) {
       res.status(404).json({ error: "Not found" });
       return;
     }
-    updateImpressionStatus(id, body.status, {
+    await updateImpressionStatus(id, body.status, {
       decisionNotes:
         body.decisionNotes ||
         `Set to ${STATUS_LABELS[body.status]} by ${u.displayName}`,
       outcome: body.outcome,
       forwardedTo: body.forwardedTo,
     });
-    res.json({ item: getImpression(id) });
+    res.json({ item: await getImpression(id) });
   });
 
-  app.get("/api/radar", requireLeader, (_req, res) => {
-    res.json({ items: topicRadar(10) });
+  app.get("/api/radar", requireLeader, async (_req, res) => {
+    res.json({ items: await topicRadar(10) });
   });
 
-  app.get("/api/learning", requireLeader, (_req, res) => {
-    res.json(learningSummary());
+  app.get("/api/learning", requireLeader, async (_req, res) => {
+    res.json(await learningSummary());
   });
 
-  app.get("/api/prayer", requireLeader, (_req, res) => {
-    const focuses = listPrayerFocuses().map((f) => ({
-      ...f,
-      linkedWatchmen: countIntercessorsLinked(f.id),
-    }));
+  app.get("/api/prayer", requireLeader, async (_req, res) => {
+    const focuses = await Promise.all(
+      (await listPrayerFocuses()).map(async (f) => ({
+        ...f,
+        linkedWatchmen: await countIntercessorsLinked(f.id),
+      })),
+    );
     res.json({ items: focuses });
   });
 
-  app.post("/api/prayer", requireLeader, (req, res) => {
+  app.post("/api/prayer", requireLeader, async (req, res) => {
     const u = authed(req);
     const body = req.body as {
       title?: string;
@@ -283,11 +287,11 @@ export function registerApi(app: Express): void {
     }
     const impressionIds = body.impressionId ? [body.impressionId] : [];
     if (body.impressionId) {
-      updateImpressionStatus(body.impressionId, "intercession", {
+      await updateImpressionStatus(body.impressionId, "intercession", {
         decisionNotes: `Prayer focus created by ${u.displayName}`,
       });
     }
-    const focus = createPrayerFocus({
+    const focus = await createPrayerFocus({
       title: body.title.trim(),
       durationWeeks: body.durationWeeks ?? 4,
       leaderName: u.displayName,
@@ -298,29 +302,32 @@ export function registerApi(app: Express): void {
       impressionIds,
     });
     res.status(201).json({
-      item: { ...focus, linkedWatchmen: countIntercessorsLinked(focus.id) },
+      item: {
+        ...focus,
+        linkedWatchmen: await countIntercessorsLinked(focus.id),
+      },
     });
   });
 
-  app.post("/api/prayer/:id/update", requireLeader, (req, res) => {
+  app.post("/api/prayer/:id/update", requireLeader, async (req, res) => {
     const id = Number(req.params.id);
     const text = String((req.body as { text?: string }).text || "").trim();
     if (!text) {
       res.status(400).json({ error: "text required" });
       return;
     }
-    addPrayerUpdate(id, text);
+    await addPrayerUpdate(id, text);
     res.json({ ok: true });
   });
 
-  app.patch("/api/prayer/:id/status", requireLeader, (req, res) => {
+  app.patch("/api/prayer/:id/status", requireLeader, async (req, res) => {
     const id = Number(req.params.id);
     const status = (req.body as { status?: string }).status;
     if (!status || !["active", "paused", "completed"].includes(status)) {
       res.status(400).json({ error: "Invalid status" });
       return;
     }
-    setPrayerStatus(
+    await setPrayerStatus(
       id,
       status as "active" | "paused" | "completed",
       (req.body as { reflection?: string }).reflection,
@@ -328,18 +335,18 @@ export function registerApi(app: Express): void {
     res.json({ ok: true });
   });
 
-  app.get("/api/users", requireAdmin, (_req, res) => {
-    res.json({ items: listUsers() });
+  app.get("/api/users", requireAdmin, async (_req, res) => {
+    res.json({ items: await listUsers() });
   });
 
-  app.patch("/api/users/:id/role", requireAdmin, (req, res) => {
+  app.patch("/api/users/:id/role", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const role = (req.body as { role?: Role }).role;
     if (!role || !["watcher", "leader", "admin"].includes(role)) {
       res.status(400).json({ error: "Invalid role" });
       return;
     }
-    setUserRole(id, role);
+    await setUserRole(id, role);
     res.json({ ok: true });
   });
 }
