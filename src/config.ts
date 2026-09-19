@@ -54,6 +54,8 @@ export const config = {
   leaderChatId: chatId("LEADER_CHAT_ID"),
   openaiApiKey: process.env.OPENAI_API_KEY?.trim() || "",
   openaiModel: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
+  openaiTranscribeModel:
+    process.env.OPENAI_TRANSCRIBE_MODEL?.trim() || "whisper-1",
   openaiBaseUrl:
     process.env.OPENAI_BASE_URL?.trim().replace(/\/$/, "") || "",
   mysql: {

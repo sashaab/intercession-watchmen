@@ -1,13 +1,10 @@
 import type { Express, NextFunction, Request, Response } from "express";
-import { analyzeImpression, formatAiAnalysis } from "../ai/analyze.js";
 import { config, type Role } from "../config.js";
 import {
-  createImpression,
   getImpression,
   learningSummary,
   listImpressionsForLeaders,
   listOwnImpressions,
-  setAiFields,
   topicRadar,
   updateImpressionStatus,
 } from "../services/impressions.js";
@@ -24,12 +21,7 @@ import {
   setUserRole,
   syncUser,
 } from "../services/users.js";
-import type {
-  ContextType,
-  ImpressionType,
-  Status,
-  Urgency,
-} from "../types.js";
+import type { Status } from "../types.js";
 import {
   CONTEXT_LABELS,
   CONTEXTS,
@@ -153,50 +145,9 @@ export function registerApi(app: Express): void {
     res.json({ items: await listOwnImpressions(u.id, 30) });
   });
 
-  app.post("/api/impressions", async (req, res) => {
-    const u = authed(req);
-    const body = req.body as {
-      perceived?: string;
-      interpretation?: string;
-      type?: ImpressionType;
-      context?: ContextType;
-      urgency?: Urgency;
-      prayed?: boolean;
-      confidential?: boolean;
-    };
-
-    if (!body.perceived?.trim() || !body.type || !body.context) {
-      res.status(400).json({ error: "perceived, type, context required" });
-      return;
-    }
-
-    const impression = await createImpression({
-      watchmanId: u.id,
-      watchmanName: u.displayName,
-      perceived: body.perceived.trim(),
-      interpretation: body.interpretation?.trim() || undefined,
-      type: body.type,
-      context: body.context,
-      urgency: body.urgency || "none",
-      prayed: Boolean(body.prayed),
-      confidential: Boolean(body.confidential),
-    });
-
-    const recent = (
-      await listImpressionsForLeaders({
-        includeConfidential: false,
-        limit: 30,
-      })
-    ).filter((i) => i.id !== impression.id);
-
-    const analysis = await analyzeImpression(impression, recent);
-    await setAiFields(impression.id, analysis.topicCluster, analysis.recommendation);
-    const saved = (await getImpression(impression.id))!;
-
-    res.status(201).json({
-      impression: saved,
-      analysis,
-      analysisText: formatAiAnalysis(analysis),
+  app.post("/api/impressions", (_req, res) => {
+    res.status(405).json({
+      error: "Record impressions in the Telegram bot (/new). Mini App is view-only.",
     });
   });
 

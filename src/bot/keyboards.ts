@@ -17,7 +17,7 @@ export function mainMenuKeyboard(user: UserRow): InlineKeyboard {
   const kb = new InlineKeyboard();
 
   if (config.webappUrl) {
-    kb.webApp("📱 Open Mini App", config.webappUrl).row();
+    kb.webApp("📱 Dashboard", config.webappUrl).row();
   }
 
   kb.text("✍️ Record in chat", "menu:record")

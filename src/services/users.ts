@@ -56,9 +56,9 @@ export type RoleResolution = {
 
 /**
  * Priority:
- * 1) ADMIN_CHAT_ID membership → admin
- * 2) LEADER_CHAT_ID membership → leader
- * 3) ADMIN_IDS / LEADER_IDS fallback
+ * 1) ADMIN_IDS / LEADER_IDS (explicit — no chat membership needed)
+ * 2) ADMIN_CHAT_ID membership → admin
+ * 3) LEADER_CHAT_ID membership → leader
  * 4) watcher
  */
 export async function resolveRole(telegramId: number): Promise<RoleResolution> {
@@ -68,6 +68,19 @@ export async function resolveRole(telegramId: number): Promise<RoleResolution> {
     Date.now() - cached.at < config.roleCacheSec * 1000
   ) {
     return { role: cached.role, detail: `${cached.detail} (cached)` };
+  }
+
+  const bootstrap = resolveBootstrapRole(telegramId);
+  if (bootstrap !== "watcher") {
+    const result = {
+      role: bootstrap,
+      detail:
+        bootstrap === "admin"
+          ? "from ADMIN_IDS"
+          : "from LEADER_IDS",
+    };
+    membershipCache.set(telegramId, { ...result, at: Date.now() });
+    return result;
   }
 
   const chatsConfigured = Boolean(config.adminChatId || config.leaderChatId);
@@ -91,15 +104,12 @@ export async function resolveRole(telegramId: number): Promise<RoleResolution> {
     }
   }
 
-  const bootstrap = resolveBootstrapRole(telegramId);
-  const detail =
-    bootstrap !== "watcher"
-      ? "from ADMIN IDS / LEADER IDS"
-      : chatsConfigured
-        ? "not in role chats → watcher"
-        : "default watcher (set ADMIN CHAT ID / LEADER CHAT ID)";
-
-  const result = { role: bootstrap, detail };
+  const result = {
+    role: "watcher" as const,
+    detail: chatsConfigured
+      ? "not in ADMIN_IDS / role chats → watcher"
+      : "default watcher (set ADMIN_IDS)",
+  };
   membershipCache.set(telegramId, { ...result, at: Date.now() });
   return result;
 }
@@ -125,12 +135,14 @@ export async function upsertUser(
 
   if (existing) {
     const user = mapUser(existing);
-    if (user.display_name !== displayName) {
+    const nextRole = preferredRole ?? user.role;
+    const nextName = displayName;
+    if (user.display_name !== nextName || user.role !== nextRole) {
       await exec(
-        `UPDATE ${tables.users} SET display_name = ? WHERE telegram_id = ?`,
-        [displayName, telegramId],
+        `UPDATE ${tables.users} SET display_name = ?, role = ? WHERE telegram_id = ?`,
+        [nextName, nextRole, telegramId],
       );
-      return { ...user, display_name: displayName };
+      return { ...user, display_name: nextName, role: nextRole };
     }
     return user;
   }
@@ -189,11 +201,18 @@ export async function listUsers(): Promise<UserRow[]> {
 }
 
 export function isLeaderOrAdmin(user: UserRow | undefined): boolean {
-  return !!user && (user.role === "leader" || user.role === "admin");
+  if (!user) return false;
+  if (user.role === "leader" || user.role === "admin") return true;
+  return (
+    config.adminIds.includes(user.telegram_id) ||
+    config.leaderIds.includes(user.telegram_id)
+  );
 }
 
 export function isAdmin(user: UserRow | undefined): boolean {
-  return !!user && user.role === "admin";
+  if (!user) return false;
+  if (user.role === "admin") return true;
+  return config.adminIds.includes(user.telegram_id);
 }
 
 export function displayNameFromCtx(from: {

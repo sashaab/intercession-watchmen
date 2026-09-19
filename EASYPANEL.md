@@ -39,6 +39,28 @@ MYSQL_TABLE_PREFIX=watchmen_
 
 Пользователю MySQL нужны права на `icf_watchmen` (**CREATE**, SELECT, INSERT, UPDATE, DELETE). Таблицы создадутся сами при старте приложения.
 
+Если в логах:
+
+```text
+Access denied for user 'mysql'@'%' to database 'icf_watchmen'
+```
+
+база создана, но пользователю приложения на неё нет прав. В phpMyAdmin под **root** / админом выполните (подставьте своего пользователя из `MYSQL_USER`):
+
+```sql
+GRANT ALL PRIVILEGES ON icf_watchmen.* TO 'mysql'@'%';
+FLUSH PRIVILEGES;
+```
+
+Либо в EasyPanel → MySQL → Users / Databases привяжите пользователя `mysql` к базе `icf_watchmen`.
+
+Альтернатива без отдельной БД: пишите в уже доступную базу с префиксом:
+
+```env
+MYSQL_DATABASE=icf_english_cb
+MYSQL_TABLE_PREFIX=watchmen_
+```
+
 Если в phpMyAdmin у `icf_watchmen` написано **No tables found** — приложение либо не стартовало с этой БД, либо у пользователя нет CREATE. Тогда:
 1. Проверьте `MYSQL_DATABASE=icf_watchmen` и логи старта (`MySQL tables: watchmen_…`).
 2. Или вручную: phpMyAdmin → `icf_watchmen` → **SQL** → выполните файл `sql/schema.sql` из репозитория.
@@ -50,6 +72,8 @@ Volume `/app/data` больше не нужен.
 
 ```env
 BOT_TOKEN=
+ADMIN_IDS=123456789
+LEADER_IDS=
 ADMIN_CHAT_ID=
 LEADER_CHAT_ID=
 PORT=3000
@@ -69,6 +93,7 @@ OPENAI_API_KEY=
 OPENAI_MODEL=DeepSeek-V4.1-Flash
 ```
 
+`ADMIN_IDS` — ваш Telegram ID из `/id` в боте (можно несколько через запятую). Чаты не обязательны: `ADMIN_IDS` даёт роль admin без членства в группах.
 `$(PRIMARY_DOMAIN)` EasyPanel подставит сам. Или впишите домен вручную: `https://watchmen.ваш-домен.com`
 
 ## 5. Deploy

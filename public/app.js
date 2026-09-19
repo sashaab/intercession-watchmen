@@ -2,7 +2,7 @@ const tg = window.Telegram?.WebApp;
 const state = {
   me: null,
   meta: null,
-  view: "record",
+  view: "mine",
   selectedId: null,
 };
 
@@ -54,10 +54,7 @@ function isLeader() {
 }
 
 function navItems() {
-  const items = [
-    { id: "record", label: "Record" },
-    { id: "mine", label: "My history" },
-  ];
+  const items = [{ id: "mine", label: "My history" }];
   if (isLeader()) {
     items.push(
       { id: "inbox", label: "Inbox" },
@@ -94,14 +91,14 @@ async function render() {
   renderNav();
   el.main.innerHTML = `<div class="panel"><p class="panel-lead mb-0">Loading…</p></div>`;
   try {
-    if (state.view === "record") await renderRecord();
-    else if (state.view === "mine") await renderMine();
+    if (state.view === "mine") await renderMine();
     else if (state.view === "inbox") await renderInbox();
     else if (state.view === "detail") await renderDetail();
     else if (state.view === "radar") await renderRadar();
     else if (state.view === "prayer") await renderPrayer();
     else if (state.view === "learning") await renderLearning();
     else if (state.view === "roles") await renderRoles();
+    else await renderMine();
   } catch (err) {
     el.main.innerHTML = `<div class="panel"><p class="panel-lead mb-0">${escapeHtml(
       err.message,
@@ -112,94 +109,6 @@ async function render() {
 function previewBanner() {
   if (tg?.initData) return "";
   return `<div class="preview-banner">Browser preview mode (DEV_PREVIEW). In Telegram the same UI opens as a Mini App.</div>`;
-}
-
-async function renderRecord() {
-  const types = state.meta.types
-    .map((t) => `<option value="${t.id}">${escapeHtml(t.label)}</option>`)
-    .join("");
-  const contexts = state.meta.contexts
-    .map((c) => `<option value="${c.id}">${escapeHtml(c.label)}</option>`)
-    .join("");
-  const urgencies = state.meta.urgencies
-    .map((u) => `<option value="${u}">${u}</option>`)
-    .join("");
-
-  el.main.innerHTML = `
-    <section class="panel">
-      ${previewBanner()}
-      <h2 class="panel-title">Record an impression</h2>
-      <p class="panel-lead">Keep <em>what you perceived</em> separate from <em>what you think it might mean</em>.</p>
-      <form id="recordForm">
-        <div class="mb-3">
-          <label class="form-label" for="perceived">What did you perceive?</label>
-          <textarea class="form-control" id="perceived" name="perceived" required placeholder="Original perception only"></textarea>
-        </div>
-        <div class="mb-3">
-          <label class="form-label" for="interpretation">Interpretation (optional)</label>
-          <textarea class="form-control" id="interpretation" name="interpretation" placeholder="Your thoughts about meaning — separate field"></textarea>
-        </div>
-        <div class="row g-2 mb-3">
-          <div class="col-sm-6">
-            <label class="form-label" for="type">Type</label>
-            <select class="form-select" id="type" name="type" required>${types}</select>
-          </div>
-          <div class="col-sm-6">
-            <label class="form-label" for="context">Context</label>
-            <select class="form-select" id="context" name="context" required>${contexts}</select>
-          </div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label" for="urgency">Urgency</label>
-          <select class="form-select" id="urgency" name="urgency">${urgencies}</select>
-        </div>
-        <div class="form-check mb-2">
-          <input class="form-check-input" type="checkbox" name="prayed" id="prayed" />
-          <label class="form-check-label" for="prayed">Already prayed about this</label>
-        </div>
-        <div class="form-check mb-3">
-          <input class="form-check-input" type="checkbox" name="confidential" id="confidential" />
-          <label class="form-check-label" for="confidential">Confidential / sensitive</label>
-        </div>
-        <button class="btn btn-watch" type="submit">Submit</button>
-      </form>
-      <div id="recordResult"></div>
-    </section>
-  `;
-
-  document.getElementById("recordForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const payload = {
-      perceived: fd.get("perceived"),
-      interpretation: fd.get("interpretation") || undefined,
-      type: fd.get("type"),
-      context: fd.get("context"),
-      urgency: fd.get("urgency"),
-      prayed: fd.get("prayed") === "on",
-      confidential: fd.get("confidential") === "on",
-    };
-    const btn = e.target.querySelector('button[type="submit"]');
-    btn.disabled = true;
-    btn.textContent = "Saving…";
-    try {
-      const data = await api("/impressions", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      toast(`Saved #${data.impression.id}`);
-      tg?.HapticFeedback?.notificationOccurred?.("success");
-      document.getElementById("recordResult").innerHTML = `
-        <div class="ai-box">${escapeHtml(data.analysisText)}</div>
-      `;
-      e.target.reset();
-    } catch (err) {
-      toast(err.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Submit";
-    }
-  });
 }
 
 function impressionCard(item, { openable = true } = {}) {
@@ -233,13 +142,14 @@ async function renderMine() {
   const { items } = await api("/impressions/mine");
   el.main.innerHTML = `
     <section class="panel">
+      ${previewBanner()}
       <h2 class="panel-title">My history</h2>
-      <p class="panel-lead">Your impressions and processing status.</p>
+      <p class="panel-lead">Record new impressions in the Telegram bot (/new). This app is for review.</p>
       <div class="d-grid gap-2">
         ${
           items.length
             ? items.map((i) => impressionCard(i)).join("")
-            : `<p class="empty mb-0">No impressions yet.</p>`
+            : `<p class="empty mb-0">No impressions yet. Use the bot: /new</p>`
         }
       </div>
     </section>

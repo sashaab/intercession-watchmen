@@ -1,5 +1,6 @@
 import { Bot, InlineKeyboard, type Context } from "grammy";
 import { analyzeImpression, formatAiAnalysis } from "../ai/analyze.js";
+import { transcribeAudio } from "../ai/transcribe.js";
 import { config } from "../config.js";
 import { getDbStatus } from "../db/index.js";
 import {
@@ -88,8 +89,8 @@ async function showHome(ctx: AppContext): Promise<void> {
     "It never replaces spiritual discernment by the leadership team.",
     "",
     config.webappUrl
-      ? "📱 Open the <b>Mini App</b> for dashboard &amp; full form, or record quickly in chat."
-      : "Set <code>WEBAPP_URL</code> to enable the Mini App button. Chat recording works now.",
+      ? "📱 Open the <b>Mini App</b> for dashboard &amp; review. Record only in this chat (text or voice)."
+      : "Set <code>WEBAPP_URL</code> to enable the Mini App dashboard. Record here with text or voice.",
     "",
     "Guardian perceives → App documents → AI suggests → Leadership decides.",
   ].join("\n");
@@ -737,76 +738,76 @@ export function createBot(token: string): Bot {
     if (!user) return;
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return;
+    await handleDraftInput(ctx, user.telegram_id, text, { deleteUserMsg: true });
+  });
+
+  bot.on(["message:voice", "message:audio"], async (ctx) => {
+    const user = await ensureUser(ctx);
+    if (!user) return;
 
     const draft = await getDraft(user.telegram_id);
-    if (!draft) {
-      await ctx.reply("Open the menu with /start or tap ✍️ Record impression.");
+    if (
+      !draft ||
+      (draft.step !== "perceived" &&
+        draft.step !== "interpretation" &&
+        !draft.perceived?.startsWith("__prayer_update__:"))
+    ) {
+      await ctx.reply(
+        "Start with /new first, then send a voice note for Step 1 or 2.",
+      );
       return;
     }
 
-    // Prayer update capture
-    if (draft.perceived?.startsWith("__prayer_update__:")) {
-      const id = Number(draft.perceived.split(":")[1]);
-      await addPrayerUpdate(id, text);
-      await clearDraft(user.telegram_id);
-      await ctx.reply(`Update added to prayer focus #${id}.`, {
-        reply_markup: new InlineKeyboard().text("« Prayer list", "menu:prayer"),
+    const status = await ctx.reply("🎧 Transcribing…");
+    try {
+      const file =
+        ctx.message.voice ?? ctx.message.audio;
+      if (!file) {
+        await ctx.api.editMessageText(
+          status.chat.id,
+          status.message_id,
+          "No audio found in that message.",
+        );
+        return;
+      }
+      const tgFile = await ctx.api.getFile(file.file_id);
+      if (!tgFile.file_path) {
+        throw new Error("Telegram did not return a file path.");
+      }
+      const url = `https://api.telegram.org/file/bot${config.botToken}/${tgFile.file_path}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Download failed (${res.status})`);
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const ext = tgFile.file_path.includes(".")
+        ? tgFile.file_path.slice(tgFile.file_path.lastIndexOf("."))
+        : ".ogg";
+      const text = await transcribeAudio(buffer, `voice${ext}`);
+
+      try {
+        await ctx.api.deleteMessage(status.chat.id, status.message_id);
+      } catch {
+        // ignore
+      }
+      await tryDeleteUserMessage(ctx);
+      await handleDraftInput(ctx, user.telegram_id, text, {
+        deleteUserMsg: false,
+        fromVoice: true,
       });
-      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("voice transcription failed", err);
+      try {
+        await ctx.api.editMessageText(
+          status.chat.id,
+          status.message_id,
+          `⚠️ Could not transcribe: ${msg}`,
+        );
+      } catch {
+        await ctx.reply(`⚠️ Could not transcribe: ${msg}`);
+      }
     }
-
-    if (draft.step === "perceived") {
-      draft.perceived = text;
-      draft.step = "interpretation";
-      await saveDraft(user.telegram_id, draft);
-      await tryDeleteUserMessage(ctx);
-      await setDraftPrompt(
-        ctx,
-        user.telegram_id,
-        draft,
-        [
-          "*Step 2 — Interpretation (optional)*",
-          "",
-          `*Perceived:* ${escapeMd(text)}`,
-          "",
-          "Add *your interpretation* (what you think it might mean), or skip.",
-          "Keep this separate from the original perception.",
-        ].join("\n"),
-        {
-          parse_mode: "Markdown",
-          reply_markup: skipInterpretationKeyboard(),
-        },
-      );
-      return;
-    }
-
-    if (draft.step === "interpretation") {
-      draft.interpretation = text;
-      draft.step = "type";
-      await saveDraft(user.telegram_id, draft);
-      await tryDeleteUserMessage(ctx);
-      await setDraftPrompt(
-        ctx,
-        user.telegram_id,
-        draft,
-        [
-          "*Step 3 — Type*",
-          "",
-          `*Perceived:* ${escapeMd(draft.perceived ?? "—")}`,
-          `*Interpretation:* ${escapeMd(text)}`,
-          "",
-          "Select *type of impression*:",
-        ].join("\n"),
-        {
-          parse_mode: "Markdown",
-          reply_markup: typeKeyboard(),
-        },
-      );
-      return;
-    }
-
-    // Forward target / decision notes capture could be added later
-    await ctx.reply("Use the buttons to continue, or /start for the menu.");
   });
 
   bot.catch((err) => {
@@ -814,6 +815,87 @@ export function createBot(token: string): Bot {
   });
 
   return bot;
+}
+
+async function handleDraftInput(
+  ctx: AppContext,
+  telegramId: number,
+  text: string,
+  opts?: { deleteUserMsg?: boolean; fromVoice?: boolean },
+): Promise<void> {
+  const draft = await getDraft(telegramId);
+  if (!draft) {
+    await ctx.reply("Open the menu with /start or tap ✍️ Record in chat.");
+    return;
+  }
+
+  if (draft.perceived?.startsWith("__prayer_update__:")) {
+    const id = Number(draft.perceived.split(":")[1]);
+    await addPrayerUpdate(id, text);
+    await clearDraft(telegramId);
+    await ctx.reply(`Update added to prayer focus #${id}.`, {
+      reply_markup: new InlineKeyboard().text("« Prayer list", "menu:prayer"),
+    });
+    return;
+  }
+
+  const voiceNote = opts?.fromVoice
+    ? ["", "_Transcribed from your voice message._"]
+    : [];
+
+  if (draft.step === "perceived") {
+    draft.perceived = text;
+    draft.step = "interpretation";
+    await saveDraft(telegramId, draft);
+    if (opts?.deleteUserMsg) await tryDeleteUserMessage(ctx);
+    await setDraftPrompt(
+      ctx,
+      telegramId,
+      draft,
+      [
+        "*Step 2 — Interpretation (optional)*",
+        "",
+        `*Perceived:* ${escapeMd(text)}`,
+        "",
+        "Add *your interpretation* (text or voice), or skip.",
+        "Keep this separate from the original perception.",
+        ...voiceNote,
+      ].join("\n"),
+      {
+        parse_mode: "Markdown",
+        reply_markup: skipInterpretationKeyboard(),
+      },
+    );
+    return;
+  }
+
+  if (draft.step === "interpretation") {
+    draft.interpretation = text;
+    draft.step = "type";
+    await saveDraft(telegramId, draft);
+    if (opts?.deleteUserMsg) await tryDeleteUserMessage(ctx);
+    await setDraftPrompt(
+      ctx,
+      telegramId,
+      draft,
+      [
+        "*Step 3 — Type*",
+        "",
+        `*Perceived:* ${escapeMd(draft.perceived ?? "—")}`,
+        `*Interpretation:* ${escapeMd(text)}`,
+        "",
+        "Select *type of impression*:",
+        ...voiceNote,
+      ].join("\n"),
+      {
+        parse_mode: "Markdown",
+        reply_markup: typeKeyboard(),
+      },
+    );
+    return;
+  }
+
+  await ctx.reply("Use the buttons to continue, or /start for the menu.");
 }
 
 async function beginRecord(ctx: AppContext): Promise<void> {
@@ -824,7 +906,8 @@ async function beginRecord(ctx: AppContext): Promise<void> {
     "*Step 1 — What did you perceive?*",
     "",
     "Write only the original perception (not your interpretation yet).",
-    "You can also describe a dream, image, verse, or prayer burden in free text.",
+    "You can send *text* or a *voice message* (AI will transcribe).",
+    "Dream, image, verse, or prayer burden — free form.",
   ].join("\n");
   const markup = new InlineKeyboard().text("✖️ Cancel", "draft:cancel");
 
