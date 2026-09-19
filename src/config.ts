@@ -50,7 +50,6 @@ export const config = {
   botToken: botToken || "dev:preview-token",
   adminIds: idList("ADMIN_IDS"),
   leaderIds: idList("LEADER_IDS"),
-  adminChatId: chatId("ADMIN_CHAT_ID"),
   leaderChatId: chatId("LEADER_CHAT_ID"),
   openaiApiKey: process.env.OPENAI_API_KEY?.trim() || "",
   openaiModel: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",

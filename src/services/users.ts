@@ -56,10 +56,9 @@ export type RoleResolution = {
 
 /**
  * Priority:
- * 1) ADMIN_IDS / LEADER_IDS (explicit — no chat membership needed)
- * 2) ADMIN_CHAT_ID membership → admin
- * 3) LEADER_CHAT_ID membership → leader
- * 4) watcher
+ * 1) ADMIN_IDS / LEADER_IDS (explicit)
+ * 2) LEADER_CHAT_ID membership → leader
+ * 3) watcher
  */
 export async function resolveRole(telegramId: number): Promise<RoleResolution> {
   const cached = membershipCache.get(telegramId);
@@ -83,17 +82,7 @@ export async function resolveRole(telegramId: number): Promise<RoleResolution> {
     return result;
   }
 
-  const chatsConfigured = Boolean(config.adminChatId || config.leaderChatId);
-
-  if (chatsConfigured && config.runBot) {
-    if (await isInChat(config.adminChatId, telegramId)) {
-      const result = {
-        role: "admin" as const,
-        detail: `member of admin chat (${config.adminChatId})`,
-      };
-      membershipCache.set(telegramId, { ...result, at: Date.now() });
-      return result;
-    }
+  if (config.leaderChatId && config.runBot) {
     if (await isInChat(config.leaderChatId, telegramId)) {
       const result = {
         role: "leader" as const,
@@ -106,9 +95,9 @@ export async function resolveRole(telegramId: number): Promise<RoleResolution> {
 
   const result = {
     role: "watcher" as const,
-    detail: chatsConfigured
-      ? "not in ADMIN_IDS / role chats → watcher"
-      : "default watcher (set ADMIN_IDS)",
+    detail: config.leaderChatId
+      ? "not in ADMIN_IDS / LEADER_CHAT → watcher"
+      : "default watcher (set ADMIN_IDS or LEADER_CHAT_ID)",
   };
   membershipCache.set(telegramId, { ...result, at: Date.now() });
   return result;

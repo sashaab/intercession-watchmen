@@ -74,7 +74,6 @@ Volume `/app/data` больше не нужен.
 BOT_TOKEN=
 ADMIN_IDS=123456789
 LEADER_IDS=
-ADMIN_CHAT_ID=
 LEADER_CHAT_ID=
 PORT=3000
 DEV_PREVIEW=0
@@ -93,7 +92,8 @@ OPENAI_API_KEY=
 OPENAI_MODEL=DeepSeek-V4.1-Flash
 ```
 
-`ADMIN_IDS` — ваш Telegram ID из `/id` в боте (можно несколько через запятую). Чаты не обязательны: `ADMIN_IDS` даёт роль admin без членства в группах.
+`ADMIN_IDS` — ваш Telegram ID из `/id` (admin без чатов).  
+`LEADER_CHAT_ID` — группа лидеров: члены получают роль leader; бот шлёт туда уведомления о новых impression. Добавьте бота в группу и выполните `/chatid`.
 `$(PRIMARY_DOMAIN)` EasyPanel подставит сам. Или впишите домен вручную: `https://watchmen.ваш-домен.com`
 
 ## 5. Deploy

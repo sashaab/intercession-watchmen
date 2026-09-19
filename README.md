@@ -64,14 +64,12 @@ WEBAPP_URL=https://ваш-туннель.trycloudflare.com
 
 ## Роли
 
-Предпочтительно — по членству в Telegram-чатах:
+1. **Admin** — через `ADMIN_IDS` (Telegram user ID из `/id`), без чатов  
+2. **Leader** — через `LEADER_IDS` или членство в группе `LEADER_CHAT_ID`  
+3. Иначе — watcher  
 
-1. Добавьте бота в группу лидеров и/или админов  
-2. В группе напишите `/chatid`  
-3. Вставьте ID в `.env` как `LEADER_CHAT_ID` / `ADMIN_CHAT_ID`  
-
-Приоритет: участник admin-чата → admin; leader-чата → leader; иначе watcher.  
-`ADMIN_IDS` / `LEADER_IDS` — запасной вариант без чатов.  
+В группу лидеров добавьте бота, напишите `/chatid`, вставьте ID в `LEADER_CHAT_ID`.  
+Туда же бот шлёт уведомления о новых impression.  
 Проверка: `/whoami`
 
 | Роль | Возможности |

@@ -77,7 +77,7 @@ function escapeHtml(text: string): string {
 async function showHome(ctx: AppContext): Promise<void> {
   const user = await ensureUser(ctx);
   if (!user) return;
-  // HTML parse mode: Markdown breaks on underscores in roleDetail (ADMIN_CHAT_ID etc.)
+  // HTML parse mode: Markdown breaks on underscores in roleDetail
   const text = [
     `<b>Intercession Watchmen</b>`,
     "",
@@ -242,9 +242,6 @@ export function createBot(token: string): Bot {
         `Role: ${user.role}`,
         `Source: ${user.roleDetail}`,
         "",
-        config.adminChatId
-          ? `ADMIN_CHAT_ID: ${config.adminChatId}`
-          : "ADMIN_CHAT_ID: not set",
         config.leaderChatId
           ? `LEADER_CHAT_ID: ${config.leaderChatId}`
           : "LEADER_CHAT_ID: not set",
@@ -262,7 +259,7 @@ export function createBot(token: string): Bot {
         `Chat type: ${chat.type}`,
         `Chat ID: \`${chat.id}\``,
         "",
-        "Paste into .env as ADMIN_CHAT_ID or LEADER_CHAT_ID",
+        "Paste into .env as LEADER_CHAT_ID",
       ].join("\n"),
       { parse_mode: "Markdown" },
     );
@@ -537,22 +534,38 @@ export function createBot(token: string): Bot {
         },
       );
 
-      // Notify leaders (non-confidential summary for confidential items)
-      const leaders = (await listUsers()).filter((u) => isLeaderOrAdmin(u));
-      for (const leader of leaders) {
-        if (leader.telegram_id === user.telegram_id) continue;
+      // Notify leadership group when a new impression is recorded
+      if (config.leaderChatId) {
         try {
           const preview = saved.confidential
-            ? `🔒 Confidential impression #${saved.id} from ${saved.watchman_name} (details restricted). Open Leadership inbox.`
-            : `New impression #${saved.id} from ${saved.watchman_name}\nTopic: ${analysis.topicCluster}`;
-          await ctx.api.sendMessage(leader.telegram_id, preview, {
+            ? [
+                `🔒 *New confidential impression #${saved.id}*`,
+                `From: ${escapeMd(saved.watchman_name)}`,
+                `Type: ${TYPE_LABELS[saved.type]} · Context: ${CONTEXT_LABELS[saved.context]}`,
+                `Urgency: ${saved.urgency}`,
+                "",
+                "_Details restricted — open Leadership inbox in the bot / Mini App._",
+              ].join("\n")
+            : [
+                `🆕 *New impression #${saved.id}*`,
+                `From: ${escapeMd(saved.watchman_name)}`,
+                `Type: ${TYPE_LABELS[saved.type]} · Context: ${CONTEXT_LABELS[saved.context]}`,
+                `Urgency: ${saved.urgency}`,
+                `Topic: ${escapeMd(analysis.topicCluster)}`,
+                "",
+                `*Perceived:* ${escapeMd(saved.perceived.slice(0, 400))}${
+                  saved.perceived.length > 400 ? "…" : ""
+                }`,
+              ].join("\n");
+          await ctx.api.sendMessage(config.leaderChatId, preview, {
+            parse_mode: "Markdown",
             reply_markup: new InlineKeyboard().text(
               "Open",
               `imp:${saved.id}:view`,
             ),
           });
-        } catch {
-          // Leader may not have started the bot yet
+        } catch (err) {
+          console.error("Failed to notify LEADER_CHAT_ID", err);
         }
       }
     } catch (err) {
